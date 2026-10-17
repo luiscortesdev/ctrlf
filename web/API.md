@@ -11,7 +11,8 @@ running (or the URL has `?mock`), the dashboard runs on demo data instead.
 
 | Method | Path | What it does |
 |---|---|---|
-| GET | `/api/state` | Everything the dashboard shows (below). Polled about 4 times a second. |
+| GET | `/api/state` | Everything the dashboard shows (below) |
+| GET | `/api/events` | The same JSON, pushed the moment it changes (server-sent events: `data: {...}`). The dashboard uses this; it polls `/api/state` only if the browser can't |
 | POST | `/api/command` | `{"text": "..."}`: exactly like typing in the app's Terminal: `where are my keys?`, `learn this`, `this is my wallet`, `yes`, `no`, `cancel`, a name, `forget keys`, `wipe`, `list` |
 | POST | `/api/listen` | Push-to-talk, like SPACE in the video window |
 | POST | `/api/click` | `{"x": 0-1, "y": 0-1}`: while teaching, "it's this one" (like clicking the video window) |
@@ -71,6 +72,16 @@ what happened. Tests: `pytest tests/test_web_api.py`.
   `App.teach` in `src/app.py`: `first name`, `looking`, `naming`, `placing`, `confirm`,
   `learning`, `click`.
 - `bbox`: fractions of the camera image `[x1, y1, x2, y2]`. Furniture isn't listed.
+- `visible`: in the live view right now, which the dashboard shows as **In view** (otherwise
+  **Out of sight**, with when it was last seen; the thing just asked about shows **Target**).
+  It means seen in the last 3 s, or in the last 5 detector passes if the detector is slower
+  than that (OWLv2 on a laptop CPU takes about 3.4 s a pass), counted from when the pass
+  ran, not when its result arrived.
+- `items`: what it remembers, plus what's boxed in the live view right now but not
+  remembered yet (that takes a few still passes, and something being carried never is).
+  Those have `"snapshot": null` until they're remembered.
+- The state is rebuilt as soon as a detector pass finishes or the app says or hears
+  something, and at least every 0.2 s otherwise.
 
 ## Adding something new
 
