@@ -47,6 +47,34 @@ def test_tracker_needs_two_sightings_and_keeps_things_steady():
     assert not tr.shown()
 
 
+
+def test_tracker_follows_something_being_carried():
+    """Smoothing lags a moving box. If new sightings were only matched to the smoothed box,
+    new tracks would keep starting on it and seen_now() (and the dashboard) would lose it."""
+    tr = tracker.Tracker(lambda label: 0.3)
+    for k in range(16):
+        tr.update([("keys", 0.4, (300 + 15 * k, 400, 340 + 15 * k, 430))], 0.4 * k)
+        if k >= 1:
+            assert "keys" in tr.seen_now(), f"lost on pass {k}"
+    assert len(tr.tracks) == 1
+
+
+def test_tracker_sticks_with_one_of_two_look_alikes_in_different_tiles():
+    """Two ID badges, each only found when its own tile comes around: the main one must
+    not flip between them every time the other is the one seen."""
+    tr = tracker.Tracker(lambda label: 0.3)
+    mains = set()
+    for k in range(24):
+        if k % 4 == 0:
+            tr.update([("id card", 0.42, (100, 100, 140, 130))], 0.4 * k)
+        elif k % 4 == 2:
+            tr.update([("id card", 0.41, (900, 500, 940, 530))], 0.4 * k)
+        else:
+            tr.update([], 0.4 * k)
+        if "id card" in tr.main:
+            mains.add(tr.main["id card"].int_box()[0])
+    assert mains == {100}
+
 def test_find_dot():
     rng = np.random.default_rng(0)
     off = rng.integers(40, 80, (480, 640, 3)).astype(np.uint8)
