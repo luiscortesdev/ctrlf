@@ -389,3 +389,56 @@ export function decode(length = 0.25) {
     out(partial(2400 + Math.random() * 2600, t + i * (length / 5), 0.012, 0.012, "square"), 0.05);
   }
 }
+
+/* ---------- The forest ---------- */
+
+// A wolf's howl: a voice-like tone that rises, holds with a little vibrato, and falls.
+export function howl(volume = 0.12) {
+  const c = audio();
+  if (c.state !== "running") return;
+  const t = c.currentTime, dur = 2.6;
+  const voice = c.createGain();
+  voice.gain.setValueAtTime(0.0001, t);
+  voice.gain.exponentialRampToValueAtTime(volume, t + 0.35);
+  voice.gain.setValueAtTime(volume, t + 1.5);
+  voice.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  const formant = c.createBiquadFilter();
+  formant.type = "bandpass"; formant.frequency.value = 900; formant.Q.value = 1.1;
+  voice.connect(formant);
+  out(formant, 0.6, -0.15);
+  const vib = c.createOscillator(), vibAmt = c.createGain();
+  vib.frequency.value = 5.2; vibAmt.gain.value = 7;
+  vib.connect(vibAmt);
+  [[1, "sawtooth", 0.35], [1.003, "triangle", 0.6], [2, "sine", 0.15]].forEach(([mult, type, level]) => {
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = type; g.gain.value = level;
+    o.frequency.setValueAtTime(330 * mult, t);
+    o.frequency.exponentialRampToValueAtTime(540 * mult, t + 0.7);
+    o.frequency.setValueAtTime(540 * mult, t + 1.4);
+    o.frequency.exponentialRampToValueAtTime(300 * mult, t + dur);
+    vibAmt.connect(o.frequency);
+    o.connect(g).connect(voice);
+    o.start(t); o.stop(t + dur + 0.1);
+  });
+  vib.start(t); vib.stop(t + dur + 0.1);
+}
+
+// Soft wind through the trees, on loop. Returns stop().
+export function wind(volume = 0.045) {
+  const c = audio();
+  const src = c.createBufferSource();
+  src.buffer = noiseBuffer(4); src.loop = true;
+  const lp = c.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 420; lp.Q.value = 0.7;
+  const g = c.createGain(); g.gain.value = 0.0001;
+  g.gain.exponentialRampToValueAtTime(volume, c.currentTime + 3);
+  const lfo = c.createOscillator(), lfoAmt = c.createGain();
+  lfo.frequency.value = 0.07; lfoAmt.gain.value = 220;
+  lfo.connect(lfoAmt).connect(lp.frequency);
+  src.connect(lp).connect(g); out(g, 0.2);
+  src.start(); lfo.start();
+  return () => {
+    const now = c.currentTime;
+    g.gain.cancelScheduledValues(now); g.gain.setValueAtTime(Math.max(g.gain.value, 0.0001), now);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 1); src.stop(now + 1.1); lfo.stop(now + 1.1);
+  };
+}

@@ -2,10 +2,15 @@
 
 *Ctrl+F for your room.*
 
-Two pages, plain HTML/CSS/JS, no build step. Every library and font is in `vendor/`, so it works with no internet.
+Three pages, plain HTML/CSS/JS, no build step. Every library and font is in `vendor/`, so it works with no internet.
 
 - `index.html`: the ~18 second 3D intro (three.js + GSAP). Plays once, then goes to the dashboard.
-- `dashboard.html`: live feed, ask bar, status, last seen, tracking, teaching, activity.
+- `dashboard.html`: **the forest.** A low-poly night forest (three.js) with a guide wolf at a fork:
+  - **The Hunt** (left path): teach a new key item. Name it → show it to the laptop camera → place it ("is this it?") → done.
+  - **The Pack** (right path): your key items (only things you taught), with a photo, last seen and where. Click one to find it.
+  - **The Watch**: asking (the bar at the bottom, on every screen) flies up to the live view with the laser on the item.
+  - The camera follows the wolf down the path you pick, then rises into the night sky where the panel opens. Arrow keys + Enter pick a path, Esc goes back.
+- `classic.html`: the previous dashboard (live feed, status, last seen, activity). Linked as "Classic" in the corner.
 
 ## Run it
 
@@ -52,7 +57,8 @@ All sounds are generated in code (`js/sound.js`), so there are no audio files to
 |---|---|
 | `/index.html?replay` | Play the intro again |
 | `/index.html?replay&at=12.5` | Freeze the intro at 12.5 seconds (for tweaking) |
-| `/dashboard.html?mock` | Force demo data even when the backend is up |
+| `/dashboard.html?mock` | Force demo data even when the backend is up (taught items are remembered in this browser) |
+| `/classic.html` | The previous dashboard |
 
 ## Where to change things
 
@@ -63,8 +69,11 @@ All sounds are generated in code (`js/sound.js`), so there are no audio files to
 | Colors, fonts | `css/base.css`: the `:root` variables |
 | Logo | `js/brand.js` |
 | Cursor, background, hover effects | `js/fx.js` + the `fx-*` classes in `css/base.css` |
-| Dashboard layout | `dashboard.html` + `css/dashboard.css` |
+| Forest scene: trees, paths, wolf, moon, camera moves | `js/world/forest.js` (`FORK` and `SKY` set where the camera goes) |
+| Forest pages: panels, ask bar, live view | `dashboard.html` + `css/world.css` + `js/world/main.js` |
+| The Hunt (teaching steps) | `js/world/hunt.js` |
+| Classic dashboard layout | `classic.html` + `css/dashboard.css` |
 | Sounds | `js/sound.js`: one function per sound |
 | Backend connection | `js/api.js` (the only file that talks to the app) and `src/web.py` in the repo |
-| Teach mode (live: the app's own teaching; demo: browser webcam) | `js/teach.js` |
-| Arrival animation after the intro | `arrive()` in `js/dashboard.js` |
+| Classic teach mode | `js/teach.js` |
+| Arrival animation after the intro (the red collapses into the wolf's eye) | `arrive()` in `js/world/main.js` |

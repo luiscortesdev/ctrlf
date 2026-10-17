@@ -4,7 +4,7 @@
 // If the app isn't running, it falls back to mock mode so the dashboard still
 // works for design and demos (add ?mock to the URL to force it).
 
-const listeners = { item: [], state: [], log: [], tracked: [], target: [], connection: [], teach: [], voice: [] };
+const listeners = { item: [], state: [], log: [], tracked: [], target: [], connection: [], teach: [], voice: [], taught: [] };
 
 export function on(event, fn) { listeners[event].push(fn); }
 function emit(event, data) { listeners[event].forEach((fn) => fn(data)); }
@@ -74,8 +74,10 @@ function saveHidden(names) { try { localStorage.setItem("ctrlf-hidden", JSON.str
 export async function teach(name, images) {
   await wait(700);
   if (!mock.tracked.some((t) => t.name === name)) mock.tracked = [...mock.tracked, { name, enabled: true }];
+  if (!mock.taught.includes(name)) { mock.taught = [...mock.taught, name]; saveMockTaught(); emit("taught", mock.taught); }
+  mock.photos[name] = images[0];
   emit("tracked", mock.tracked);
-  const item = { name, visible: true, last_seen: new Date().toISOString(), where: "just taught", snapshot: images[0], bbox: [0.42, 0.42, 0.58, 0.58] };
+  const item = { name, visible: true, last_seen: new Date().toISOString(), where: "on the desk", snapshot: images[0], bbox: [0.42, 0.42, 0.58, 0.58] };
   mock.items[name] = item;
   emit("item", { type: "item_update", ...item });
   emit("log", { time: new Date(), text: `Learned "${name}" from ${images.length} photos` });
@@ -135,6 +137,10 @@ function applyState(s) {
     if (!names.has(name)) { delete live.items[name]; emit("item", { type: "item_remove", name }); }
   }
 
+  // Key items: what it was taught (the world page shows only these).
+  const taughtKey = JSON.stringify(s.taught);
+  if (taughtKey !== live.taughtKey) { live.taughtKey = taughtKey; emit("taught", s.taught); }
+
   // What it can find: everything it knows + what it was taught.
   const known = JSON.stringify([s.can_find, s.taught]);
   if (known !== live.known) {
@@ -193,7 +199,25 @@ const mock = {
   ],
   items: {},
   busy: false,
+  taught: loadMockTaught(),   // demo mode remembers what you taught (in this browser)
+  photos: {},
 };
+
+function loadMockTaught() { try { return JSON.parse(localStorage.getItem("ww-mock-taught") || "[]"); } catch { return []; } }
+function saveMockTaught() { try { localStorage.setItem("ww-mock-taught", JSON.stringify(mock.taught)); } catch {} }
+
+// A photo of a taught item: the one from teaching (live: saved by the app).
+export function taughtPhoto(name) {
+  if (mode === "live") return `/taught/${encodeURIComponent(name.replace(/ /g, "_"))}.jpg`;
+  return mock.photos[name] || null;
+}
+
+// Forget a key item (live: the app's "forget" command).
+export async function forget(name) {
+  if (mode === "live") return command(`forget ${name}`);
+  mock.taught = mock.taught.filter((n) => n !== name); saveMockTaught();
+  delete mock.items[name]; emit("item", { type: "item_remove", name }); emit("taught", mock.taught);
+}
 
 function minutesAgo(m) { return new Date(Date.now() - m * 60000).toISOString(); }
 
@@ -218,6 +242,7 @@ function startMock() {
   ];
   seed.forEach((it) => { mock.items[it.name] = it; emit("item", { type: "item_update", ...it }); });
   emit("tracked", mock.tracked);
+  emit("taught", mock.taught);
   emit("state", { type: "state", state: "IDLE" });
   emit("log", { time: new Date(), text: "Mock mode: backend not connected" });
 
