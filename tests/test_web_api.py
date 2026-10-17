@@ -32,6 +32,7 @@ class FakeMemory:
 class FakeApp:
     def __init__(self, rows):
         self.mem = FakeMemory(rows)
+        self.tracks = {}  # seen now but not remembered yet
         self.visible = {"keys"}
         self.highlight = None
         self.teach = None
@@ -57,7 +58,7 @@ HELPERS = {
     "taught": {},
 }
 VOICE = type("Voice", (), {"state": "idle"})()
-DETECTOR = type("Detector", (), {"secs_per_frame": 0.4})()
+DETECTOR = type("Detector", (), {"secs_per_frame": 0.4, "result": lambda self: (0, None, [], 0.0)})()
 
 
 def frame():
