@@ -181,32 +181,6 @@ class NetLink:
         self._drop()
 
 
-# USB vendor IDs of ESP32 boards' USB ports: Espressif's own (ESP32-S3 native USB), and the
-# USB-serial chips on DevKits (Silicon Labs CP210x, WCH CH340/CH9102, FTDI).
-ESP_VIDS = {0x303A, 0x10C4, 0x1A86, 0x0403}
-
-
-def find_ports():
-    """Serial ports that look like an ESP32, best guess first: /dev/cu.usbmodem... on a
-    Mac, COM3... on Windows, /dev/ttyACM0 or /dev/ttyUSB0 on Linux. CTRLF_SERIAL_PORT
-    (environment or .env) picks one."""
-    from src.machine import setting
-
-    chosen = setting("SERIAL_PORT")
-    if chosen:
-        return [chosen]
-    try:
-        from serial.tools import list_ports
-
-        found = [p for p in list_ports.comports() if p.vid in ESP_VIDS]
-        if found:
-            return [p.device for p in sorted(found, key=lambda p: p.vid != 0x303A)]
-    except ImportError:
-        pass
-    return sorted(glob.glob("/dev/cu.usbmodem*") + glob.glob("/dev/cu.usbserial*")
-                  + glob.glob("/dev/cu.wchusbserial*"))
-
-
 class Pointer:
     """Talks to the ESP32. link: "usb", "wifi", or "auto" = USB when it's plugged into the
     Mac, else Wi-Fi. host: its Wi-Fi address, or None to find it. Optional: everything else
@@ -248,7 +222,8 @@ class Pointer:
         except ImportError:
             print("(pyserial not installed: no USB link to the ESP32)")
             return
-        ports = find_ports()
+        ports = sorted(glob.glob("/dev/cu.usbmodem*") + glob.glob("/dev/cu.usbserial*")
+                       + glob.glob("/dev/cu.wchusbserial*"))
         if not ports:
             if self.link == "usb":
                 print("(No ESP32 plugged in: laser control off. That's fine for now.)")

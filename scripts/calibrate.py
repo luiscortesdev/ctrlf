@@ -13,7 +13,8 @@ Before you run it:
 
 Run it from Terminal.app (Esc in the video window stops it):
     source venv/bin/activate
-    python scripts/calibrate.py
+    python scripts/calibrate.py                    the Wi-Fi camera
+    python scripts/calibrate.py --camera webcam    a plugged-in camera (calibration-webcam.json)
 Takes about a minute.
 """
 
@@ -26,7 +27,8 @@ import time
 
 import cv2
 
-from src.app import CAMERA, CAMERA_LAG_SECS, DISPLAY_W, POINTER_HOST, POINTER_LINK
+from src.app import CAMERA_LAG_SECS, DISPLAY_W, POINTER_HOST, POINTER_LINK, camera_option
+from src.vision.camera import per_camera
 from src.hardware.serial_client import Pointer
 from src.vision.camera import open_camera
 from src.vision.laser_tracker import (CALIB_PATH, LASER_SETTLE_SECS, SETTLE_SECS, TILT_MAX, TILT_MIN,
@@ -88,7 +90,9 @@ def sweep(camera, pointer, pans, tilts, log=print):
 
 
 def main():
-    cap = open_camera(CAMERA, CAMERA_LAG_SECS)
+    source = camera_option(description="Laser calibration sweep.")
+    path = per_camera(CALIB_PATH, source)
+    cap = open_camera(source, CAMERA_LAG_SECS)
     pointer = Pointer(POINTER_LINK, POINTER_HOST)
     if not pointer.connected:
         raise SystemExit("No ESP32 pointer found. Plug the ESP32 in (COM port) or put it on "
@@ -110,8 +114,8 @@ def main():
             f"Only found the dot {len(points)} times; need at least 8. Check that the laser "
             "points into the camera's view, dim the lights a bit, and run it again.")
     calib = Calibration.fit(points, size)
-    calib.save(CALIB_PATH)
-    print(f"\nSaved {CALIB_PATH}: {len(calib.points)} of {len(points)} points kept, "
+    calib.save(path)
+    print(f"\nSaved {path}: {len(calib.points)} of {len(points)} points kept, "
           f"typical error {calib.error_px:.0f} px ({calib.error_deg:.2f} degrees).")
     print("ctrlf.py corrects what's left by watching the dot.")
     camera.wait(3)

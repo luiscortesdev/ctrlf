@@ -1,7 +1,6 @@
 """
 Opening the camera (a Wi-Fi camera's stream, the iPhone through Continuity Camera, or the
-laptop's own or a USB webcam), and getting it back when it drops.
-Works on macOS, Windows and Linux.
+Mac's own), and getting it back when it drops.
 
 A Wi-Fi camera (like the Tapo TCW61) is an RTSP address in CAMERA (src/app.py). Its login
 is the "Camera Account" from the Tapo app (Advanced Settings), kept in .env as
@@ -11,8 +10,8 @@ another address, open_camera finds it on the same network.
 
 import concurrent.futures
 import os
-import sys
 import socket
+import sys
 import threading
 import urllib.parse
 
@@ -122,24 +121,62 @@ class StreamCamera:
         self.running = False
 
 
-def webcam(index):
-    """cv2.VideoCapture for a camera index. On Windows, DirectShow: the default (Media
-    Foundation) can take 10+ s to open a webcam and gives it at 640x480."""
-    if sys.platform == "darwin":
-        return cv2.VideoCapture(index)
-    cap = cv2.VideoCapture(index, cv2.CAP_DSHOW) if sys.platform == "win32" else cv2.VideoCapture(index)
-    if sys.platform == "win32" and not cap.isOpened():
-        cap = cv2.VideoCapture(index)
-    if cap.isOpened():  # webcams start small; ask for HD (it uses the closest it has)
-        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-    return cap
+def local_camera(index):
+    """A camera plugged into (or built into) the laptop. On Windows through DirectShow: the
+    default (Media Foundation) takes seconds to open and keeps a queue of old frames."""
+    if sys.platform == "win32":
+        return cv2.VideoCapture(index, cv2.CAP_DSHOW)
+    return cv2.VideoCapture(index)
+
+
+def choose_camera(choice, wifi, webcam):
+    """The camera --camera (or CTRLF_CAMERA) asks for: "wifi" -> wifi, the Wi-Fi camera's
+    address; "webcam" -> webcam, a plugged-in camera's number; a number -> that camera; an
+    rtsp:// address -> that stream."""
+    choice = str(choice or "wifi").strip()
+    if choice.lower() == "wifi":
+        return wifi
+    if choice.lower() == "webcam":
+        return webcam
+    if choice.isdigit():
+        return int(choice)
+    if "://" in choice:
+        return choice
+    raise ValueError(f'--camera {choice!r}: use "wifi", "webcam", a camera number (0, 1, ...) '
+                     "or an rtsp:// address")
+
+
+def per_camera(path, source):
+    """A file that belongs to one camera's view (the laser calibration, the desk area). The
+    Wi-Fi camera's is path itself; a plugged-in camera's gets "-webcam" in its name, so
+    testing with a webcam doesn't use or overwrite the Wi-Fi camera's."""
+    if isinstance(source, str):
+        return path
+    base, ext = os.path.splitext(path)
+    return f"{base}-webcam{ext}"
+
+
+def describe_camera(source):
+    if isinstance(source, str):
+        return f"the Wi-Fi camera at {urllib.parse.urlsplit(source).hostname}"
+    return f"plugged-in camera {source}"
+
+
+def list_cameras(most=6):
+    """[(number, (width, height))] for the plugged-in cameras that send a picture."""
+    found = []
+    for index in range(most):
+        cap = local_camera(index)
+        ok, frame = cap.read() if cap.isOpened() else (False, None)
+        cap.release()
+        if ok:
+            found.append((index, frame.shape[1::-1]))
+    return found
 
 
 def capture(source):
     """A camera by index, or a stream by address (with the login from .env)."""
-    return StreamCamera(with_login(source)) if isinstance(source, str) else webcam(source)
+    return StreamCamera(with_login(source)) if isinstance(source, str) else local_camera(source)
 
 
 def open_camera(index, lag=0.0):
@@ -152,7 +189,8 @@ def open_camera(index, lag=0.0):
         if found is None:
             raise SystemExit(f"Can't reach the camera at {urllib.parse.urlsplit(index).hostname}. "
                              "Is the Mac on the same Wi-Fi (the iPhone hotspot), and is the "
-                             "camera plugged in? (Campus Wi-Fi often blocks this: use a hotspot.)")
+                             "camera plugged in? (Campus Wi-Fi often blocks this: use a hotspot.) "
+                             "No Wi-Fi camera here? Add --camera webcam to use a plugged-in one.")
         where = urllib.parse.urlsplit(found).hostname
         if found != index:
             print(f"(The camera is at {where} now; put that in CAMERA to start faster.)")
@@ -163,19 +201,15 @@ def open_camera(index, lag=0.0):
                              "Account in the Tapo app (Advanced Settings), not the Tapo login.")
         open_camera.source, open_camera.lag = found, lag
         return cap
-    cap = capture(index)
+    cap = local_camera(index)
     if not cap.isOpened() and index != 0:
         # No iPhone? It has to be near the Mac, screen locked, still, and in landscape.
-        print(f"(Camera {index} isn't available; using the built-in camera instead.)")
-        cap = capture(0)
+        print(f"(Camera {index} isn't available; using the Mac's own camera instead.)")
+        cap = local_camera(0)
         open_camera.source = 0
     if not cap.isOpened():
-        if sys.platform == "darwin":
-            raise SystemExit("Can't open the camera. Run this from Terminal.app and allow camera "
-                             "access (System Settings > Privacy & Security > Camera), then retry.")
-        raise SystemExit("Can't open the camera. Is another app using it (Zoom, Teams, the "
-                         "Camera app)? On Windows, check Settings > Privacy & security > Camera "
-                         "> 'Let desktop apps access your camera'. Or set CTRLF_CAMERA in .env.")
+        raise SystemExit("Can't open the camera. Run this from Terminal.app and allow camera "
+                         "access (System Settings > Privacy & Security > Camera), then retry.")
     return cap
 
 

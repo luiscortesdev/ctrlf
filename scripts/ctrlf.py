@@ -1,6 +1,6 @@
-r"""
-Ctrl+F for Your Room: start the app (see src/app.py). In a terminal, in the repo:
-    source venv/bin/activate        (Mac/Linux; Windows: .venv\Scripts\activate)
+"""
+Ctrl+F for Your Room: start the app (see src/app.py). From Terminal.app, in the repo:
+    source venv/bin/activate
     python scripts/ctrlf.py
 """
 

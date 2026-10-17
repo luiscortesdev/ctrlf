@@ -24,7 +24,15 @@ Setup (once, in Terminal, in the repo folder). Use Python 3.11, not Homebrew's 3
 Run it from Terminal.app. macOS only gives the camera to apps that ask for permission,
 and Terminal does (approve it the first time):
     source venv/bin/activate
-    python scripts/ctrlf.py
+    python scripts/ctrlf.py                    the Wi-Fi camera (CAMERA below)
+    python scripts/ctrlf.py --camera webcam    a plugged-in camera instead (WEBCAM below)
+    python scripts/ctrlf.py --camera 1         plugged-in camera number 1
+    python scripts/ctrlf.py --list-cameras     which numbers the plugged-in cameras have
+(Or set CTRLF_CAMERA=webcam.) If the Wi-Fi camera can't be reached and no camera was
+asked for, it uses the plugged-in one (WEBCAM) instead, so the app and the website still
+start; --camera wifi = the Wi-Fi camera or nothing. A plugged-in camera has its own laser
+calibration and desk area (calibration-webcam.json, desk_area-webcam.json): run
+calibrate.py --camera webcam.
 What it remembers and learns is kept in data/ (never committed: it's photos of your room).
 The first run downloads OWLv2 (~620 MB); after that it works offline.
 
@@ -50,6 +58,7 @@ In the video window: D, then click two corners = only look at the desk (D again 
 
 """
 
+import argparse
 import collections
 import glob
 import json
@@ -65,16 +74,21 @@ import time
 import cv2
 import numpy as np
 
+from src import tts
 from src.hardware.serial_client import Pointer
-from src.vision.camera import capture, open_camera, reconnect_camera
+from src.vision.camera import (choose_camera, describe_camera, list_cameras, local_camera,
+                               open_camera, per_camera, reconnect_camera)
 from src.vision.detector import CUTOFF_MARGIN, PICTURE_MATCH
 
 # ------------------------------------------------------------------ settings
 # The Tapo Wi-Fi camera (TCW61) on the iPhone hotspot. Its login is the "Camera Account"
 # from the Tapo app (Advanced Settings), kept in .env as CAMERA_USER and CAMERA_PASSWORD.
 # If the hotspot gives it another address, the app finds it there. 1 = the iPhone
-# (Continuity Camera), 0 = the Mac's built-in.
+# (Continuity Camera), 0 = the Mac's built-in. --camera picks another at startup.
 CAMERA = "rtsp://172.20.10.5:554/stream1"
+# --camera webcam: which plugged-in camera. On a Mac 0 is usually the built-in one and a
+# USB webcam 1 (--list-cameras shows them).
+WEBCAM = 0
 # How far a Wi-Fi camera's picture runs behind; the laser waits this much longer before
 # trusting a frame. A guess: measure it once the laser is here.
 CAMERA_LAG_SECS = 0.8
@@ -90,9 +104,10 @@ DETECT_SIZE = 768
 TILES = (2, 2)
 TILE_SIZE = 640
 DISPLAY_W = 1280           # width of the live view window
-VOICE = True               # SPACE in the video window = push-to-talk (needs mlx-whisper)
+VOICE = True               # SPACE in the video window = push-to-talk (needs mlx-whisper on
+                           # the Mac, faster-whisper elsewhere)
 # Gemini hears the questions and says the answers (src/gemini.py; needs GEMINI_API_KEY in .env
-# and internet). It falls back to Whisper and the computer's own voice by itself. False = those only.
+# and internet). It falls back to Whisper and the laptop's voice by itself. False = those only.
 GEMINI = True
 # Phone alerts (src/phone.py): when your phone says you've left home, it looks for these for
 # LEAVE_LOOK_SECS, and whatever is still sitting in the room gets pushed to your phone.
@@ -190,14 +205,6 @@ HIGHLIGHT_SECS = 6    # how long the green circle stays after a question
 # this checks it every pass. Zooming in further didn't help: keys on a chair across the
 # room scored 0.45 at tile zoom and no better in tighter crops.
 FOCUS_SPOTS = 6       # how many missing things' spots it takes turns over
-
-# The settings above are for a computer with a GPU (Apple Silicon or NVIDIA). Without one
-# they'd take 20+ seconds a pass, so src/machine.py lightens them, and CTRLF_* in .env
-# overrides any of them (see machine.py).
-from src import machine  # noqa: E402
-
-DETECTOR, DETECT_SIZE, TILES, FOCUS_SPOTS, CAMERA, TEACH_CAMERA, MACHINE = machine.tune(
-    DETECTOR, DETECT_SIZE, TILES, FOCUS_SPOTS, CAMERA, TEACH_CAMERA)
 
 # Rough laser aim, used only until calibrate.py has made calibration.json.
 # If the head moves the wrong way, flip the sign of that SPAN.
@@ -608,9 +615,7 @@ def say(text):
     if SPEAKER:
         SPEAKER.say(text)
     else:
-        from src.voice import system_say
-
-        system_say(text)  # the computer's own voice
+        tts.speak(text)  # the laptop's own voice
 
 
 TEACH_STATES = {  # what it's doing while learning something, for Gemini
@@ -634,10 +639,14 @@ def voice_context(app):
             "conversation": [line for when, line in list(CONVERSATION) if now - when < CONVERSATION_SECS]}
 
 
-def voice_commands(meaning):
+def voice_commands(meaning, naming=False):
     """Gemini's actions -> what App.command() understands (the same as typing them).
-    A chat reply is said right away."""
+    A chat reply is said right away. naming: it just asked what something is called, so a
+    find is the answer: "my phone" once came back as "where is my phone", and that got
+    learned as the name."""
     actions = [(a["do"], (a.get("thing") or "").strip().lower()) for a in meaning["actions"]]
+    if naming:
+        actions = [("name" if do == "find" else do, thing) for do, thing in actions]
     named = [thing for do, thing in actions if do == "name" and thing]
     if named and any(do == "teach" and not thing for do, thing in actions):
         # "learn this, it's my retainer case" can come back as teach + name
@@ -847,7 +856,8 @@ def read_questions(q):
         try:
             line = input("> ")
         except (EOFError, KeyboardInterrupt):
-            q.put("quit")
+            # Nothing to type in (started from an editor or in the background; on Windows
+            # even NUL says it's a terminal): keep running. Quit = "quit", Esc or Ctrl+C.
             return
         if line.strip():
             q.put(line.strip())
@@ -1447,6 +1457,52 @@ class App:
         return True
 
 
+def camera_option(argv=None, description=None):
+    """The camera picked with --camera (or CTRLF_CAMERA); the Wi-Fi camera if neither.
+    Also points the desk area at that camera's file. --list-cameras: show the plugged-in
+    ones and stop."""
+    global AREA_PATH
+    p = argparse.ArgumentParser(description=description)
+    p.add_argument("--camera", default=os.environ.get("CTRLF_CAMERA"),
+                   help='"wifi" (default), "webcam", a camera number, or an rtsp:// address')
+    p.add_argument("--list-cameras", action="store_true", help="show the plugged-in cameras")
+    args = p.parse_args(argv)
+    if args.list_cameras:
+        found = list_cameras()
+        for index, (w, h) in found:
+            print(f"  --camera {index}    {w}x{h}")
+        raise SystemExit(0 if found else "No plugged-in camera sends a picture.")
+    try:
+        source = choose_camera(args.camera, CAMERA, WEBCAM)
+    except ValueError as e:
+        p.error(str(e))
+    camera_option.asked = args.camera is not None  # else open_room_camera may fall back
+    AREA_PATH = per_camera(os.path.join(DATA, "desk_area.json"), source)
+    print(f"(Camera: {describe_camera(source)})")
+    return source
+
+
+camera_option.asked = False
+
+
+def open_room_camera(source):
+    """Opens the camera camera_option picked. If that's the Wi-Fi camera only because it's
+    the default, and it can't be reached, the plugged-in one (WEBCAM) instead, so the app
+    and the website still start. Returns the capture; open_camera.source says which."""
+    global AREA_PATH
+    try:
+        return open_camera(source, CAMERA_LAG_SECS)
+    except SystemExit as e:
+        if camera_option.asked or not isinstance(source, str):
+            raise
+        print(f"\n({e.code}\nUsing plugged-in camera {WEBCAM} for now; --camera wifi = the "
+              "Wi-Fi camera only.)")
+    cap = open_camera(WEBCAM)
+    AREA_PATH = per_camera(os.path.join(DATA, "desk_area.json"), open_camera.source)
+    print(f"(Camera: {describe_camera(open_camera.source)})")
+    return cap
+
+
 def load_area():
     """The desk area as fractions of the frame (x1, y1, x2, y2), or None for all of it."""
     try:
@@ -1464,30 +1520,34 @@ def save_area(area):
         os.remove(AREA_PATH)
 
 
-def main():
+def main(argv=None):
     global SPEAKER
+    # The camera first: it's quick to find out it isn't there, and which one it is decides
+    # the desk area and laser calibration files.
+    cap = open_room_camera(camera_option(argv))
+    source = open_camera.source
     from src.vision.detector import BackgroundDetector, make_detector
     from src.vision.glide import Glide
 
-    print(f"({MACHINE})")
     print(f"Loading the {DETECTOR} detector (the first run downloads it)...")
     model = make_detector(DETECTOR, PROMPTS, DETECT_SIZE)
-    governor = machine.Governor(model)
     load_taught(model)
     # The detector reports a bit below each threshold, so the tracker can keep following
     # things whose score dips for a moment.
     detector = BackgroundDetector(model, keep_level, load_area(), TILES, TILE_SIZE)
-    cap = open_camera(CAMERA, CAMERA_LAG_SECS)
 
-    from src.vision.laser_tracker import Aimer, Calibration, RoughMap
+    from src.vision.laser_tracker import CALIB_PATH, Aimer, Calibration, RoughMap
 
     pointer = Pointer(POINTER_LINK, POINTER_HOST)
-    calib = Calibration.load()
+    calib_path = per_camera(CALIB_PATH, source)
+    calib = Calibration.load(calib_path)
     if calib:
         print(f"(Laser calibration loaded: {len(calib.points)} points, "
               f"typically {calib.error_px:.0f} px off before correcting)")
     elif pointer.connected:
-        print("(No calibration.json yet: aiming roughly. Run calibrate.py once the laser is on.)")
+        how = "calibrate.py" + ("" if isinstance(source, str) else f" --camera {source}")
+        print(f"(No {os.path.basename(calib_path)} yet: aiming roughly. Run {how} once the "
+              "laser is on.)")
     questions = queue.Queue()
     phone = None
     if PHONE:
@@ -1507,14 +1567,14 @@ def main():
 
         SPEAKER = Speaker(use_gemini=GEMINI)
     except ImportError as e:
-        print(f"(speaking with the computer's own voice: {e})")
+        print(f"(speaking with the laptop's own voice: {e})")
     if GEMINI:
         from src import gemini
 
         def check_gemini():
             problem = gemini.check()
             print("\n(Gemini: ready)" if problem is None else
-                  f"\n(Gemini not working: {problem}. Whisper and the computer's own voice fill in.)")
+                  f"\n(Gemini not working: {problem}. Whisper and the laptop's voice fill in.)")
         threading.Thread(target=check_gemini, daemon=True).start()
 
     # The website (web/): http://localhost:8000. See src/web.py.
@@ -1533,7 +1593,8 @@ def main():
                 if text:
                     CONVERSATION.append((time.time(), f"Person: {text}"))
                 if meaning is not None:
-                    commands = voice_commands(meaning)
+                    t = app.teach
+                    commands = voice_commands(meaning, t is not None and t["phase"] in ("naming", "first name"))
                     print(f'\n(heard: "{text}" -> Gemini: {"; ".join(commands) or "-"})')
                     for c in commands:
                         questions.put(c)
@@ -1544,7 +1605,7 @@ def main():
                     questions.put(text)
             voice = Listener(heard, (lambda: voice_context(app)) if GEMINI else None)
         except ImportError as e:
-            print(f"(voice off: {e}. pip install -r requirements.txt)")
+            print(f"(voice off: {e}. pip install sounddevice)")
 
     # For debugging: CTRLF_DET_LOG=<folder> logs every detector pass and a frame every 2 s.
     det_log = os.environ.get("CTRLF_DET_LOG")
@@ -1609,7 +1670,6 @@ def main():
             look = detector.last_look[2] if detector.last_look and detector.last_look[0] == seq else None
             app.update(candidates, det_frame, det_time, views, look)
             detector.focus = app.focus_spots(det_frame.shape[1::-1], det_time)
-            governor.update(detector, seq)
             glide.anchor(app.tracker.shown(), det_frame.shape[1::-1], det_time)
             if app.teach and detector.last_look and detector.last_look[0] == seq:
                 app.on_pass(det_frame, detector.last_look[2], det_time)
@@ -1664,7 +1724,7 @@ def main():
         # Teaching with the laptop camera: open it only while it's needed.
         want_laptop = bool(app.teach and app.teach["laptop"] and app.teach["phase"] == "looking")
         if want_laptop and teach_cap is None:
-            teach_cap = capture(TEACH_CAMERA)
+            teach_cap = local_camera(TEACH_CAMERA)
             if teach_cap.isOpened() and teach_cap.read()[0]:
                 cv2.namedWindow(TEACH_WINDOW)
                 cv2.setMouseCallback(TEACH_WINDOW, on_laptop_click)

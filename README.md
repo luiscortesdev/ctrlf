@@ -3,7 +3,7 @@
 A camera that remembers where your things are, and a laser on a pan/tilt head that points
 at them. Ask "where are my keys?" and it says where they are ("Your keys are on the
 chair") while the laser lands on them. If they're out of sight, it says when and where it
-last saw them and shows that snapshot. Everything runs locally on a laptop (Mac, Windows or Linux); the ESP32 only
+last saw them and shows that snapshot. Everything runs locally on a Mac; the ESP32 only
 drives the servos and the laser.
 
 ## What it does
@@ -40,11 +40,12 @@ drives the servos and the laser.
 | `src/voice.py` | Push-to-talk (Gemini, with mlx-whisper as the fallback) and speaking the answers |
 | `src/gemini.py` | Gemini: understands the spoken question, speaks the answer |
 | `src/phone.py` | Phone alerts through ntfy.sh when you leave home without something |
-| `src/machine.py` | Checks for a GPU and picks detector settings that keep up; `CTRLF_*` overrides |
 | `src/web.py` | The website's link to the app: serves `web/`, the live view and `/api/*` |
 | `web/` | The website: 3D intro + dashboard (plain HTML/CSS/JS, works offline) |
 | `scripts/camera_test.py` | Live view with boxes, for tuning thresholds |
 | `scripts/calibrate.py` | Laser calibration sweep (writes `data/calibration.json`) |
+| `scripts/measure_lag.py` | Times how far the Wi-Fi camera runs behind, with the LED ring (for `CAMERA_LAG_SECS`) |
+| `scripts/preflight.py` | Checks the network, camera, ESP32, Gemini, models, audio and calibration before a demo |
 | `firmware/esp32_controller/` | ESP32-S3 firmware: smooth servo glides, anti-backlash, laser auto-off, Wi-Fi, LED ring |
 | `data/` | What it remembers and learns. Not in git: it's photos of your room |
 
@@ -61,39 +62,9 @@ echo "GEMINI_API_KEY=your-key" > .env                # from aistudio.google.com;
 Without a Gemini key it still works, offline: Whisper hears the questions and the Mac's
 `say` answers (or set `GEMINI = False` in `src/app.py`).
 
-## Setup (Windows or Linux)
-
-Install Python 3.11 from python.org (tick "Add python.exe to PATH"), then in the repo:
-
-```powershell
-py -3.11 -m venv .venv
-.venv\Scripts\activate                     # Linux: source .venv/bin/activate
-python -m pip install -r requirements.txt
-python scripts/cache_models.py              # once
-```
-
-With an NVIDIA GPU, install the GPU build of torch first (the default one on Windows is
-CPU-only): `python -m pip install torch --index-url https://download.pytorch.org/whl/cu128`.
-
-### Any computer: it picks its own settings
-
-`src/machine.py` checks for a GPU when the app starts and prints what it chose, e.g.
-`(Windows AMD64, CPU only, no GPU found: owl at 512, tiles off, look-again off)`.
-
-| Computer | Detector | Speech in | Speech out |
-|---|---|---|---|
-| Apple Silicon Mac | OWLv2 768, 2x2 tiles, look-again | mlx-whisper (GPU) | Gemini, else `say` |
-| NVIDIA GPU | same as the Mac | Whisper small.en (GPU) | Gemini, else Windows voice / espeak |
-| CPU only (most Windows laptops) | OWLv2 512, whole view only; goes down to 320 by itself if a pass takes over 1.5 s | Whisper base.en | Gemini, else Windows voice / espeak |
-
-On a CPU it finds big things fine but small things (keys) less often, so the demo should
-run on a GPU machine. Override anything with `CTRLF_*` lines in `.env`, e.g.
-`CTRLF_CAMERA=1`, `CTRLF_DETECTOR=yolo`, `CTRLF_DETECT_SIZE=768`, `CTRLF_TILES=2x2`,
-`CTRLF_SERIAL_PORT=COM5` (all of them are listed at the top of `src/machine.py`).
-
 ## Run
 
-On a Mac, from **Terminal.app** (macOS only gives the camera and mic to apps that asked; approve
+From **Terminal.app** (macOS only gives the camera and mic to apps that asked; approve
 both the first time):
 
 ```bash
@@ -112,8 +83,23 @@ Its login is the "Camera Account" from the Tapo app (Advanced Settings), not the
 login: add `CAMERA_USER=...` and `CAMERA_PASSWORD=...` to `.env`. Turn off its timestamp
 and logo overlays in the Tapo app (the ticking clock confuses the laser's dot finder).
 `CAMERA = 1` = the iPhone through Continuity Camera (it falls back to the Mac's camera).
-On Windows/Linux a number means a webcam: 0 is the built-in one, a USB camera is usually
-1 (`CTRLF_CAMERA=1` in `.env`).
+
+No Wi-Fi camera? Pick another one at startup (works for `ctrlf.py`, `calibrate.py` and
+`camera_test.py`, or set `CTRLF_CAMERA` instead):
+
+```bash
+python scripts/ctrlf.py --list-cameras     # the plugged-in cameras' numbers
+python scripts/ctrlf.py --camera webcam    # WEBCAM in src/app.py (0 = usually the Mac's own)
+python scripts/ctrlf.py --camera 1         # a USB webcam is usually 1 on a Mac
+```
+
+With no `--camera`, if the Wi-Fi camera can't be reached it uses the plugged-in camera
+(`WEBCAM`) instead, so the app and the website still start; `--camera wifi` means the Wi-Fi
+camera or nothing (for the demo).
+
+A plugged-in camera sees the room differently, so it gets its own laser calibration and desk
+area (`data/calibration-webcam.json`, `data/desk_area-webcam.json`); the Wi-Fi camera's
+files are left alone. Calibrate it with `python scripts/calibrate.py --camera webcam`.
 In the video window: SPACE = ask out
 loud, T = teach something, D = only look at a desk area, Esc = quit. Typed commands:
 `where are my keys?`, `learn this`, `forget keys`, `call it ball` (rename what was just

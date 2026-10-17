@@ -16,6 +16,7 @@ there's no key, no internet, or Gemini is slow.
 
 import io
 import os
+import re
 import time
 import wave
 
@@ -24,6 +25,9 @@ import wave
 # Flash-Lite 2.2-24 s; 3.8 Flash 2.5-3.4 s for a one-line text reply, even on low thinking.
 MODEL = "gemini-3.5-flash-lite"
 TTS_MODEL = "gemini-3.8-flash-lite-tts"  # first audio after 0.74 s (3.8 Flash TTS: 0.9 s)
+# The free tier allows only 10 spoken answers a day (used up on Oct 17), and the other TTS
+# models need paid credits (402 "prepayment credits are depleted" on this key's project).
+# Once either runs out, speak() stops asking until it comes back: see VoiceUsedUp.
 TTS_VOICE = "Aoede"                      # one of Gemini's prebuilt voices
 TTS_RATE = 24000                         # it sends 16-bit mono PCM at this rate
 
@@ -53,7 +57,8 @@ about my wallet?" is a find too.
 - teach: they want to show it something new to learn ("learn this", "remember this one", \
 "this is my retainer case"). thing = what they call it, or "" if they didn't say.
 - name: they're telling it what the thing it's being taught is called (it asked, or it's \
-being shown something). thing = the name.
+being shown something). thing = the name. Right after it asked what something is called, \
+an answer like "my phone" is a name, not a find, even for a thing on the lists below.
 - yes / no: an answer to the device's yes-or-no question ("yeah that's it", "nope, wrong \
 one").
 - cancel: stop what it's doing, never mind.
@@ -214,13 +219,34 @@ def understand(wav, context):
     return meaning
 
 
+class VoiceUsedUp(Exception):
+    """The daily free quota or the paid credits for speech have run out."""
+
+
+_used_up_until = 0.0  # when speech can work again (time.time()); until then, don't ask
+
+
+def _used_up_wait(error):
+    """Seconds until speech can work again, if that's what error is about, else None."""
+    code = getattr(error, "code", None)
+    if code == 402:  # no paid credits left: try again in an hour, in case some were added
+        return 3600
+    if code == 429 and "PerDay" in str(error):
+        wait = re.search(r"retryDelay'?: '(\d+)s", str(error))
+        return int(wait.group(1)) if wait else 3600
+    return None
+
+
 def speak(text):
     """Yields the spoken text as chunks of 16-bit mono PCM at TTS_RATE, as they arrive."""
+    global _used_up_until
     from google.genai import types
 
     c = client()
     if c is None:
         raise RuntimeError("no Gemini key")
+    if time.time() < _used_up_until:
+        raise VoiceUsedUp("Gemini's speech quota is used up")
     config = types.GenerateContentConfig(
         response_modalities=["AUDIO"],
         speech_config=types.SpeechConfig(voice_config=types.VoiceConfig(
@@ -233,6 +259,10 @@ def speak(text):
             first = next(chunks, None)  # refusals come with the first chunk
             break
         except Exception as e:
+            wait = _used_up_wait(e)
+            if wait is not None:
+                _used_up_until = time.time() + wait
+                raise VoiceUsedUp(f"Gemini's speech quota is used up ({e!r:.80})") from e
             if attempt == TRIES - 1 or not _try_again(e, started):
                 raise
     for chunk in _chain(first, chunks):
