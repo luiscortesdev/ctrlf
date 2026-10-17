@@ -1,324 +1,281 @@
-// wherewolf world: the page after the intro.
-// The fork (two paths) -> The Hunt (teach a key item) or The Pack (your key items),
-// each up in the sky at the end of its path. The ask bar is on every screen; asking
-// flies up to the live view (the room camera + the laser).
+// wherewolf app page: one calm screen over the night forest.
+//   Home: "What are you looking for?" (type or ask out loud) + your key items (find / remove)
+//   Add:  name it -> show it -> place it -> done   (add.js)
+//   Find: the answer in one sentence, the room camera with the laser on it
+// The forest (forest.js) is only the background now: it drifts slowly, nothing to navigate.
 
 import * as api from "../api.js";
 import * as sfx from "../sound.js";
 import * as fx from "../fx.js";
 import * as brand from "../brand.js";
 import * as world from "./forest.js";
-import * as hunt from "./hunt.js";
+import * as add from "./add.js";
 
 const $ = (id) => document.getElementById(id);
-const S = { view: "fork", prev: null, hover: null, items: new Map(), taught: [], loaded: false, moving: false, target: null };
+let F;
+const S = { view: "home", items: new Map(), taught: [], loaded: false, removing: null, lastState: null, asked: false };
 
 brand.mount();
-fx.init({ grid: false });
+fx.init({ grid: false, cursor: false, sounds: false });   // normal cursor, no hover/click sounds
 world.init($("world"));
-hunt.init({ onDone: () => renderPack() });
+world.drift(true);
+add.init({ onDone: () => renderItems() });
 
-/* ---------------- sound ---------------- */
+/* ---------------- sound (only the important moments: found, added, removed, not found) ---------------- */
 
-let stopWind = null, howled = false;
 function renderMute() {
-  $("mute").textContent = sfx.isMuted() ? "Sound off" : "Sound on";
-  $("mute").setAttribute("aria-pressed", String(sfx.isMuted()));
+  const off = sfx.isMuted();
+  $("mute").textContent = off ? "Sound: Off" : "Sound: On";
+  $("mute").setAttribute("aria-pressed", String(off));
 }
 $("mute").addEventListener("click", () => { sfx.setMuted(!sfx.isMuted()); renderMute(); });
 renderMute();
-async function wakeAudio() {
-  if (!(await sfx.unlock())) return false;
-  if (!stopWind) stopWind = sfx.wind();
-  return true;
-}
-document.addEventListener("pointerdown", async () => {
-  if (await wakeAudio() && !howled && S.view === "fork") { howled = true; world.howl(); sfx.howl(); }
-}, { once: true });
+document.addEventListener("pointerdown", () => sfx.unlock(), { once: true });
 
-/* ---------------- the fork ---------------- */
+/* ---------------- views ---------------- */
 
-const labels = { hunt: $("label-hunt"), pack: $("label-pack") };
-
-let labelHalf = null;   // half of each label's width (measured once, again on resize)
-addEventListener("resize", () => { labelHalf = null; });
-function placeLabels() {
-  if (!labelHalf) labelHalf = { hunt: labels.hunt.offsetWidth / 2 + 12, pack: labels.pack.offsetWidth / 2 + 12 };
-  for (const name of ["hunt", "pack"]) {
-    const p = world.screenPoint(name), half = labelHalf[name];
-    labels[name].style.left = `${Math.min(Math.max(p.x, half), innerWidth - half)}px`;
-    labels[name].style.top = `${p.y}px`;
+function show(view, { focus = true } = {}) {
+  if (S.view === "add" && view !== "add") add.leave();
+  S.view = view;
+  for (const v of ["home", "add", "find"]) $(v).hidden = v !== view;
+  // replay the fade-in
+  const el = $(view); el.style.animation = "none"; void el.offsetWidth; el.style.animation = "";
+  window.scrollTo({ top: 0, behavior: fx.reduced ? "auto" : "smooth" });
+  if (view === "home") { S.removing = null; renderItems(true); }
+  if (view === "add") add.enter();
+  if (focus) {
+    const target = view === "home" ? $("ask-input") : view === "find" ? $("find-h") : null;
+    if (target) { if (target.tagName === "H1") target.setAttribute("tabindex", "-1"); target.focus({ preventScroll: true }); }
   }
-  requestAnimationFrame(placeLabels);
 }
-requestAnimationFrame(placeLabels);
-
-function setHover(name) {
-  if (S.view !== "fork" || S.moving) name = null;
-  if (name === S.hover) return;
-  S.hover = name;
-  world.setHover(name);
-  for (const k of ["hunt", "pack"]) labels[k].classList.toggle("on", k === name);
-  if (name) { try { sfx.hover(); } catch {} }
-}
-world.onHover(setHover);
-world.onPick((p) => choose(p));
-for (const k of ["hunt", "pack"]) {
-  labels[k].addEventListener("pointerenter", () => setHover(k));
-  labels[k].addEventListener("pointerleave", () => setHover(null));
-  labels[k].addEventListener("click", () => choose(k));
-}
+document.querySelectorAll("[data-home]").forEach((b) => b.addEventListener("click", () => show("home")));
+$("to-add").addEventListener("click", () => show("add"));
+$("empty-add").addEventListener("click", () => show("add"));
+$("add-to-items").addEventListener("click", () => show("home"));
 addEventListener("keydown", (e) => {
-  if (e.target.closest("input, textarea") && e.key !== "Escape") return;
-  if (S.view === "fork") {
-    if (e.key === "ArrowLeft") setHover("hunt");
-    else if (e.key === "ArrowRight") setHover("pack");
-    else if ((e.key === "Enter" || e.key === " ") && S.hover) { e.preventDefault(); choose(S.hover); }
-  } else if (e.key === "Escape") {
-    if (S.view === "live") closeLive(); else goHome();
-  }
+  if (e.key !== "Escape") return;
+  if (S.removing) { confirmRemove(null); return; }
+  if (S.view !== "home") show("home");
 });
 
-async function choose(name) {
-  if (S.view !== "fork" || S.moving) return;
-  S.moving = true;
-  setHover(null);
-  await wakeAudio();
-  try { sfx.press(); sfx.swoosh("in", 0.6); } catch {}
-  $("fork-ui").classList.add("away");
-  await world.go(name);
-  S.view = name;
-  S.moving = false;
-  openPanel(name);
-}
-
-async function goHome() {
-  if (S.view === "fork" || S.moving) return;
-  S.moving = true;
-  if (S.view === "hunt") hunt.leave();
-  await closePanels();
-  try { sfx.swoosh("out", 0.6); } catch {}
-  await world.home();
-  S.view = "fork";
-  S.moving = false;
-  $("back").hidden = true;
-  $("fork-ui").classList.remove("away");
-}
-$("back").addEventListener("click", goHome);
-
-/* ---------------- panels ---------------- */
-
-function openPanel(name) {
-  const el = $(name);
-  el.hidden = false;
-  el.classList.remove("out"); void el.offsetWidth; el.classList.add("in");
-  $("back").hidden = false;
-  if (name === "hunt") hunt.enter();
-  if (name === "pack") renderPack();
-}
-
-function closePanels() {
-  const open = ["hunt", "pack", "live"].map($).filter((el) => !el.hidden);
-  if (!open.length) return Promise.resolve();
-  open.forEach((el) => { el.classList.remove("in"); el.classList.add("out"); });
-  return new Promise((r) => setTimeout(() => { open.forEach((el) => { el.hidden = true; el.classList.remove("out"); }); r(); }, fx.reduced ? 0 : 320));
-}
-
-// Across the sky from one page to the other.
-async function flyTo(name) {
-  if (S.moving) return;
-  S.moving = true;
-  if (S.view === "hunt") hunt.leave();
-  await closePanels();
-  try { sfx.swoosh("in", 0.5); } catch {}
-  await world.fly(name);
-  S.view = name;
-  S.moving = false;
-  openPanel(name);
-}
-$("hunt-to-pack").addEventListener("click", () => flyTo("pack"));
-$("pack-to-hunt").addEventListener("click", () => flyTo("hunt"));
-
-/* ---------------- The Pack ---------------- */
+/* ---------------- your key items ---------------- */
 
 function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 function relTime(iso) {
   const s = (Date.now() - new Date(iso).getTime()) / 1000;
-  if (s < 30) return "seen just now";
-  if (s < 3600) return `${Math.round(s / 60)} min ago`;
-  if (s < 86400) return `${Math.round(s / 3600)} hr ago`;
-  return `${Math.round(s / 86400)} days ago`;
+  if (s < 60) return "Seen just now";
+  if (s < 3600) { const m = Math.round(s / 60); return `Seen ${m} minute${m === 1 ? "" : "s"} ago`; }
+  if (s < 86400) { const h = Math.round(s / 3600); return `Seen ${h} hour${h === 1 ? "" : "s"} ago`; }
+  const d = Math.round(s / 86400); return `Seen ${d} day${d === 1 ? "" : "s"} ago`;
 }
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
-function renderPack() {
+let lastHtml = "";
+function renderItems(animate = false) {
   const names = [...S.taught].sort();
-  $("pack-count").textContent = names.length ? `${names.length} ${names.length === 1 ? "item" : "items"}` : "";
-  $("pack-empty").hidden = names.length > 0;
-  $("pack-grid").hidden = names.length === 0;
-  $("pack-grid").innerHTML = names.map((name, i) => {
-    const it = S.items.get(name);
+  $("items-count").textContent = names.length ? `(${names.length})` : "";
+  $("items-empty").hidden = names.length > 0;
+  $("items-grid").hidden = names.length === 0;
+  $("to-add").hidden = names.length === 0;          // the empty state has its own big button
+  const html = names.map((name, i) => {
+    const it = S.items.get(name), n = esc(name);
     const photo = (it && it.snapshot) || api.taughtPhoto(name);
-    const status = !it ? `<span class="pc-status"><i></i>Not spotted yet</span>`
-      : it.visible ? `<span class="pc-status seen"><i></i>In view</span>` : `<span class="pc-status hidden"><i></i>Out of sight</span>`;
-    const where = it ? esc(it.where || "somewhere in the room") : "Put it where the camera can see it";
+    const status = !it ? `<span class="item-status"><i></i>Not seen yet</span>`
+      : it.visible ? `<span class="item-status seen"><i></i>In view now</span>` : `<span class="item-status hidden"><i></i>Out of sight</span>`;
+    const where = it ? esc(cap(it.where || "somewhere in the room")) : "Put it where the room camera can see it.";
     const when = it ? esc(relTime(it.last_seen)) : "";
-    return `<button type="button" class="pack-card" data-name="${esc(name)}" style="--i:${i}">
-      <div class="pc-photo">${photo ? `<img src="${esc(photo)}" alt="" onerror="this.remove()">` : ""}<span class="pc-mark" data-brand="mark"></span>${status}</div>
-      <div class="pc-body"><span class="pc-name">${esc(name)}</span><span class="pc-where">${where}</span><span class="pc-when mono">${when}</span><span class="pc-find mono">Find it →</span></div>
-    </button>`;
+    return `<article class="item${animate ? " enter" : ""}" data-name="${n}" style="--i:${i}" aria-label="${n}">
+      <div class="item-photo">${photo ? `<img src="${esc(photo)}" alt="" onerror="this.remove()">` : ""}<span class="item-mark" data-brand="mark"></span>${status}</div>
+      <div class="item-body">
+        <span class="item-name">${n}</span>
+        <span class="item-where">${where}</span>
+        <span class="item-when">${when}</span>
+        <div class="item-actions">
+          <button type="button" class="btn btn-primary" data-act="find">Find</button>
+          <button type="button" class="btn btn-secondary" data-act="remove">Remove</button>
+        </div>
+      </div>
+      ${S.removing === name ? confirmHtml(n) : ""}
+    </article>`;
   }).join("");
-  brand.mount($("pack-grid"));
+  // The app sends updates several times a second; only touch the page when something shown changes.
+  if (html === lastHtml) return;
+  lastHtml = html;
+  $("items-grid").innerHTML = html;
+  brand.mount($("items-grid"));
 }
-$("pack-grid").addEventListener("click", (e) => {
-  const card = e.target.closest(".pack-card");
-  if (card) ask(`where is my ${card.dataset.name}`);
-});
-setInterval(() => { if (S.view === "pack") renderPack(); }, 20000);
+const confirmHtml = (n) => `<div class="item-confirm" role="alertdialog" aria-label="Remove ${n}?">
+  <p>Remove <span class="cap">${n}</span>?</p>
+  <p class="hint">wherewolf will forget what it looks like and where it is.</p>
+  <div class="row"><button type="button" class="btn btn-primary" data-act="remove-yes">Yes, remove</button><button type="button" class="btn btn-secondary" data-act="remove-no">Cancel</button></div>
+</div>`;
 
-api.on("taught", (list) => { S.taught = list || []; if (S.view === "pack") renderPack(); });
+function confirmRemove(name) {
+  S.removing = name;
+  renderItems();
+  if (name) $("items-grid").querySelector("[data-act=remove-no]")?.focus();
+}
+
+$("items-grid").addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-act]"), card = e.target.closest(".item");
+  if (!btn || !card) return;
+  const name = card.dataset.name;
+  switch (btn.dataset.act) {
+    case "find": ask(`where is my ${name}`); break;
+    case "remove": confirmRemove(name); break;
+    case "remove-no": confirmRemove(null); $("items-grid").querySelector(`.item[data-name="${CSS.escape(name)}"] [data-act=remove]`)?.focus(); break;
+    case "remove-yes": {
+      S.removing = null;
+      card.classList.add("gone");
+      try { await api.forget(name); } catch { card.classList.remove("gone"); renderItems(); return; }
+      try { sfx.remove(); } catch {}
+      setTimeout(() => { S.taught = S.taught.filter((n) => n !== name); renderItems(); $("ask-input").focus(); }, fx.reduced ? 0 : 300);
+      break;
+    }
+  }
+});
+setInterval(() => { if (S.view === "home") renderItems(); }, 20000);
+
+api.on("taught", (list) => { S.taught = list || []; if (S.view === "home") renderItems(); });
 api.on("item", (it) => {
   if (it.type === "item_remove") S.items.delete(it.name);
   else S.items.set(it.name, { ...S.items.get(it.name), ...it });
-  if (S.view === "pack" && S.taught.includes(it.name)) renderPack();
+  if (S.view === "home" && S.taught.includes(it.name)) renderItems();
 });
 
-/* ---------------- asking + the live view ---------------- */
-
-async function openLive() {
-  if (S.view === "live" || S.moving) return;
-  if (S.view === "hunt" && hunt.isTeaching()) return;        // don't interrupt teaching
-  S.moving = true;
-  S.prev = S.view;
-  if (S.view === "hunt") hunt.leave();
-  await closePanels();
-  $("fork-ui").classList.add("away");
-  try { sfx.swoosh("in", 0.5); } catch {}
-  await world.fly("live");
-  S.view = "live"; S.moving = false;
-  $("back").hidden = false;
-  openPanel("live");
-  setupFeed();
-}
-
-async function closeLive() {
-  if (S.view !== "live" || S.moving) return;
-  S.moving = true;
-  await closePanels();
-  const prev = S.prev || "fork";
-  if (prev === "fork") {
-    try { sfx.swoosh("out", 0.6); } catch {}
-    S.view = "live";
-    S.moving = false;
-    await goHomeFromSky();
-  } else {
-    try { sfx.swoosh("in", 0.5); } catch {}
-    await world.fly(prev);
-    S.view = prev; S.moving = false;
-    openPanel(prev);
-  }
-}
-async function goHomeFromSky() {
-  S.moving = true;
-  await world.home();
-  S.view = "fork"; S.moving = false;
-  $("back").hidden = true;
-  $("fork-ui").classList.remove("away");
-}
-$("live-close").addEventListener("click", closeLive);
+/* ---------------- asking ---------------- */
 
 function ask(text) {
-  wakeAudio();
+  sfx.unlock();
+  S.asked = true;
+  resetFind(text);
   api.ask(text);
-  openLive();
+  show("find");
 }
 $("ask-form").addEventListener("submit", (e) => {
   e.preventDefault();
-  const text = $("ask-input").value.trim() || $("ask-input").placeholder;
+  const text = $("ask-input").value.trim();
+  if (!text) { $("ask-hint").textContent = "Please type what you are looking for first, for example \"keys\"."; $("ask-input").focus(); return; }
   $("ask-input").value = "";
-  ask(text);
+  // "keys" works as well as "where are my keys?"
+  ask(/\b(where|find|lost)\b/i.test(text) ? text : `where is my ${text}`);
 });
-$("ask-mic").addEventListener("click", () => { wakeAudio(); api.listen(); });
+$("ask-mic").addEventListener("click", () => { sfx.unlock(); S.asked = true; api.listen(); });
 api.on("voice", (v) => {
   const mic = $("ask-mic");
   mic.dataset.voice = v;
-  mic.disabled = v === "off" || v === "loading";
-  mic.setAttribute("aria-label", v === "listening" ? "Stop listening" : "Ask out loud (push to talk)");
+  mic.hidden = v === "off";
+  mic.disabled = v === "loading";
+  $("ask-mic-text").textContent = v === "listening" ? "Listening… press to stop" : v === "loading" ? "Getting ready…" : "Ask out loud";
 });
 
-let feedReady = false;
-async function setupFeed() {
-  if (feedReady) return;
-  feedReady = true;
-  const url = api.videoUrl();
-  if (url) { const img = $("live-feed"); img.src = url; img.hidden = false; $("live-empty").hidden = true; return; }
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-    const v = $("live-video"); v.srcObject = stream; v.hidden = false; $("live-empty").hidden = true;
-  } catch { /* "No camera signal" stays */ }
+/* ---------------- the find screen: what the laser is doing + the item's details ---------------- */
+
+const LASER = {
+  init:   ["Initializing laser…", "Warming up"],
+  search: ["Laser ready. Looking…", "Ready"],
+  aim:    ["Pointing the laser…", "Moving onto it"],
+  on:     ["Laser is on it", "Pointing at it now"],
+  hidden: ["Laser standing by", "Off (it can't see it)"],
+  done:   ["Laser finished", "Off (done pointing)"],
+  none:   ["Laser standing by", "Off"],
+};
+F = { name: null, timer: null };
+function laser(phase) {
+  $("laser-status").dataset.phase = phase;
+  $("laser-label").textContent = LASER[phase][0];
+  $("stat-laser").textContent = LASER[phase][1];
+}
+function clock(iso) { return new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); }
+
+// Fill in the item's details from what the app remembers about it.
+function itemStats(name) {
+  if (name) F.name = name;
+  const n = F.name, it = n ? S.items.get(n) : null;
+  $("find-item").hidden = !n;
+  if (!n) return;
+  $("find-name").textContent = n;
+  const photo = (it && it.snapshot) || api.taughtPhoto(n);
+  const img = $("find-photo-img");
+  img.onerror = () => { img.hidden = true; };
+  if (!photo) img.hidden = true;
+  else if (img.getAttribute("src") !== photo) { img.hidden = false; img.src = photo; }
+  const st = $("find-status");
+  if (!it) {
+    st.className = "item-status"; st.innerHTML = "<i></i>Not seen yet";
+    $("stat-where").textContent = "It hasn't been seen yet";
+    $("stat-seen").textContent = "Never";
+    $("stat-now").textContent = "Not in view";
+    return;
+  }
+  st.className = `item-status ${it.visible ? "seen" : "hidden"}`;
+  st.innerHTML = `<i></i>${it.visible ? "In view now" : "Out of sight"}`;
+  $("stat-where").textContent = cap(it.where || "Somewhere in the room");
+  $("stat-seen").textContent = it.last_seen ? `${clock(it.last_seen)} (${relTime(it.last_seen).replace(/^Seen /, "")})` : "Unknown";
+  $("stat-now").textContent = it.visible ? "In view of the camera" : "Not in view of the camera";
+}
+// Which item a question is about: one of the key items (or anything the app knows) named in it.
+function itemIn(text) {
+  const t = text.toLowerCase();
+  const names = [...new Set([...S.taught, ...S.items.keys()])].sort((a, b) => b.length - a.length);
+  return names.find((n) => t.includes(n)) || null;
 }
 
-// Live status -> the live view (and it opens by itself when someone asks out loud).
-const STEP = { QUERYING: 0, TRACKING: 2, REPORTING: 3 };
-let lastHead = "";
-function headline(html, msg) {
-  if (html !== lastHead) { lastHead = html; fx.wordsIn($("live-headline"), html); }
-  fx.typeIn($("live-msg"), msg || "");
+function resetFind(text) {
+  F.name = null;
+  headline("Looking…", text ? `You asked: “${text}”` : "");
+  laser("init");
+  steps(0);
+  itemStats(itemIn(text || ""));
+  // The laser takes a moment to wake up; show it as ready shortly after, unless an answer came first.
+  clearTimeout(F.timer);
+  F.timer = setTimeout(() => { if ($("laser-status").dataset.phase === "init") { laser("search"); steps(1); } }, 900);
 }
-function steps(n) { document.querySelectorAll("#live-steps li").forEach((li, i) => li.classList.toggle("on", i <= n)); }
+function headline(html, msg) {
+  $("find-headline").innerHTML = html;
+  $("find-msg").textContent = msg || "";
+}
+function steps(n) { document.querySelectorAll("#find-steps li").forEach((li, i) => li.classList.toggle("on", i <= n)); }
+setInterval(() => { if (S.view === "find") itemStats(); }, 15000);
+api.on("item", (it) => { if (S.view === "find" && it.name === F.name) itemStats(); });
+
+// Say the answer out loud in demo mode (with the real app, the app's own speaker says it).
+function speak(text) {
+  if (api.mode === "live" || sfx.isMuted() || !text || !("speechSynthesis" in window)) return;
+  try { speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text); u.rate = 0.95; speechSynthesis.speak(u); } catch {}
+}
+
+const ASKING = new Set(["QUERYING", "TRACKING", "REPORTING"]);
 api.on("state", (m) => {
   const name = m.target ? esc(m.target) : "";
-  if (S.loaded && m.state in STEP && S.view !== "live") openLive();
-  // Back to idle after an answer: keep the answer on screen until the next question.
-  if (m.state === "IDLE" && S.lastState === "REPORTING") { S.lastState = "IDLE"; return; }
+  // Asked out loud (or from the app's keyboard): show the find screen by itself.
+  if (S.loaded && ASKING.has(m.state) && S.view !== "find" && !add.isTeaching()) { resetFind(m.message || ""); show("find", { focus: false }); }
+  // Back to idle after an answer: keep the answer on screen.
+  if (m.state === "IDLE" && S.lastState === "REPORTING") { S.lastState = "IDLE"; if ($("laser-status").dataset.phase === "on") laser("done"); return; }
   S.lastState = m.state;
-  $("live-snap").hidden = true;
+  if (m.target) itemStats(m.target);
   switch (m.state) {
-    case "IDLE": headline("Watching the room", "Ask where something is."); steps(-1); break;
-    case "QUERYING": { const q = m.message || m.heard; headline("Listening…", q ? `“${q}”` : ""); steps(0); break; }
-    case "TRACKING": headline(`Aiming at <em>${name}</em>`, "Steering the laser onto it."); steps(2); try { sfx.laserCharge(); } catch {} break;
+    case "IDLE": if (!S.asked) { headline("Ready", "Ask where something is."); laser("none"); steps(-1); } break;
+    case "QUERYING": { const q = m.message || m.heard; headline("Looking…", q ? `You asked: “${q}”` : ""); laser("init"); steps(0); if (q) itemStats(itemIn(q)); break; }
+    case "TRACKING": clearTimeout(F.timer); headline(`Found your <em>${name}</em>`, "Pointing the laser at it now…"); laser("aim"); steps(2); break;
     case "REPORTING":
-      if (m.result === "found") { headline(`Found <em>${name}</em>`, m.message); steps(3); try { sfx.shing(); } catch {} }
-      else if (m.result === "hidden") {
-        headline(`<em>${name}</em> is out of sight`, m.message); steps(1);
-        const it = S.items.get(m.target);
-        if (it && it.snapshot) { $("live-snap").src = it.snapshot; $("live-snap").hidden = false; }
-        try { sfx.lowTone(); } catch {}
-      } else { headline(/haven't seen|don't know/i.test(m.message || "") ? "Not in memory yet" : "Done", m.message); steps(0); }
+      clearTimeout(F.timer);
+      if (m.result === "found") {
+        headline(`Found your <em>${name}</em>`, m.message); laser("on"); steps(3);
+        try { sfx.shing(); } catch {} speak(m.message);
+      } else if (m.result === "hidden") {
+        headline(`Your <em>${name}</em> is out of sight`, m.message); laser("hidden"); steps(1);
+        try { sfx.lowTone(); } catch {} speak(m.message);
+      } else {
+        const unknown = /haven't seen|don't know|wasn't taught|not.*taught/i.test(m.message || "");
+        headline(unknown ? "Not found" : "Done", m.message); laser("none"); steps(unknown ? 0 : 1);
+        if (unknown) { try { sfx.lowTone(); } catch {} }
+        speak(m.message);
+      }
       break;
   }
 });
-
-// The laser on the live feed: beam from the rig to the target, reticle on it.
-const W = 1000, H = 562.5, RIG = { x: 40, y: 562.5 };
-function media() {
-  const img = $("live-feed"), v = $("live-video");
-  if (!img.hidden && img.naturalWidth) return [img.naturalWidth, img.naturalHeight];
-  if (!v.hidden && v.videoWidth) return [v.videoWidth, v.videoHeight];
-  return [16, 9];
-}
-function toOverlay([x1, y1, x2, y2]) {
-  const [nw, nh] = media(); const s = Math.max(W / nw, H / nh), ox = (W - nw * s) / 2, oy = (H - nh * s) / 2;
-  return { x: ox + x1 * nw * s, y: oy + y1 * nh * s, w: (x2 - x1) * nw * s, h: (y2 - y1) * nh * s };
-}
-api.on("target", ({ name, bbox }) => {
-  const beam = $("beam"), ret = $("reticle");
-  S.target = name || null;
-  if (!bbox) { beam.classList.remove("on"); ret.setAttribute("opacity", "0"); ret.classList.remove("pulse"); $("live-laser").hidden = true; return; }
-  const b = toOverlay(bbox), cx = b.x + b.w / 2, cy = b.y + b.h / 2;
-  const box = $("ret-box");
-  box.setAttribute("x", b.x); box.setAttribute("y", b.y); box.setAttribute("width", b.w); box.setAttribute("height", b.h);
-  $("ret-dot").setAttribute("cx", cx); $("ret-dot").setAttribute("cy", cy);
-  beam.setAttribute("x1", RIG.x); beam.setAttribute("y1", RIG.y);
-  beam.classList.add("on");
-  const t0 = performance.now();
-  const step = (now) => {
-    const t = Math.min(1, (now - t0) / 650), e = 1 - Math.pow(1 - t, 3);
-    beam.setAttribute("x2", RIG.x + (cx - RIG.x) * e); beam.setAttribute("y2", RIG.y + (cy - RIG.y) * e);
-    if (t < 1) requestAnimationFrame(step); else { ret.setAttribute("opacity", "1"); ret.classList.add("pulse"); }
-  };
-  requestAnimationFrame(step);
-  $("live-laser").hidden = false;
-});
+api.on("target", ({ bbox }) => { if (bbox && S.view === "find") laser("on"); });
 
 /* ---------------- connection ---------------- */
 
@@ -333,20 +290,16 @@ async function arrive() {
   if (!document.body.classList.contains("arriving")) return;
   try { sessionStorage.removeItem("ctrlf-arrive"); } catch {}
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));   // let the scene draw once
-  const eye = world.screenPoint("eye");
-  const cover = $("arrive");
-  const anim = cover.animate(
-    [{ clipPath: `circle(150% at ${eye.x}px ${eye.y}px)` }, { clipPath: `circle(0px at ${eye.x}px ${eye.y}px)` }],
-    { duration: fx.reduced ? 1 : 1200, easing: "cubic-bezier(0.75, 0, 0.2, 1)", fill: "forwards" });
-  setTimeout(async () => {
-    try { sfx.laserSnap(); } catch {}
-    if (await wakeAudio()) { howled = true; setTimeout(() => { world.howl(); sfx.howl(); }, 500); }
-  }, 1000);
+  const p = world.screenPoint("beacon");
+  const anim = $("arrive").animate(
+    [{ clipPath: `circle(150% at ${p.x}px ${p.y}px)` }, { clipPath: `circle(0px at ${p.x}px ${p.y}px)` }],
+    { duration: fx.reduced ? 1 : 1100, easing: "cubic-bezier(0.75, 0, 0.2, 1)", fill: "forwards" });
   await anim.finished;
   document.body.classList.remove("arriving");
 }
 
 (async () => {
+  show("home", { focus: false });
   arrive();
   await api.connect();
   setTimeout(() => { S.loaded = true; }, 1200);

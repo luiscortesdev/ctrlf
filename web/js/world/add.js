@@ -1,4 +1,4 @@
-// The Hunt: teach wherewolf a new key item.
+// Add a key item: teach wherewolf a new thing to keep track of.
 // Name it -> show it (laptop camera) -> place it (room camera, "is this it?") -> done.
 // Live: the app does the real teaching ("this is my <name>"), and this page follows its
 // phases (state.teach) and sends answers back (yes / no / a click / cancel).
@@ -6,7 +6,6 @@
 
 import * as api from "../api.js";
 import * as sfx from "../sound.js";
-import * as fx from "../fx.js";
 
 const $ = (id) => document.getElementById(id);
 const STEPS = ["name", "show", "place", "done"];
@@ -16,14 +15,14 @@ const h = { name: "", active: false, phase: null, laptop: false, taught: [], sho
 
 export function init({ onDone }) {
   h.onDone = onDone;
-  $("hunt-name-form").addEventListener("submit", (e) => { e.preventDefault(); start($("hunt-name").value); });
-  $("hunt-name").addEventListener("input", () => { $("hunt-error").textContent = ""; });
-  $("hunt-cancel").addEventListener("click", cancel);
-  $("hunt-yes").addEventListener("click", () => answer(true));
-  $("hunt-no").addEventListener("click", () => answer(false));
-  $("hunt-capture").addEventListener("click", captureMock);
-  $("hunt-again").addEventListener("click", () => enter());
-  $("hunt-feed").addEventListener("click", clickFeed);
+  $("add-name-form").addEventListener("submit", (e) => { e.preventDefault(); start($("add-name").value); });
+  $("add-name").addEventListener("input", () => { $("add-error").textContent = ""; });
+  $("add-cancel").addEventListener("click", cancel);
+  $("add-yes").addEventListener("click", () => answer(true));
+  $("add-no").addEventListener("click", () => answer(false));
+  $("add-capture").addEventListener("click", captureMock);
+  $("add-again").addEventListener("click", () => enter());
+  $("add-feed").addEventListener("click", clickFeed);
   api.on("teach", onTeach);
   api.on("taught", (list) => { h.taught = list; });
 }
@@ -31,10 +30,10 @@ export function init({ onDone }) {
 export function enter() {
   stopWebcam();
   h.name = ""; h.active = false; h.phase = null; h.shots = []; h.cancelled = false;
-  $("hunt-name").value = "";
-  $("hunt-error").textContent = "";
+  $("add-name").value = "";
+  $("add-error").textContent = "";
   show("name");
-  setTimeout(() => $("hunt-name").focus(), 400);
+  setTimeout(() => $("add-name").focus(), 400);
 }
 
 export function leave() {
@@ -48,51 +47,55 @@ export const isTeaching = () => h.active;
 
 /* ---------------- steps ---------------- */
 
+const TITLES = { show: "Step 2 of 3: Show it to the camera", place: "Step 3 of 3: Put it down" };
+
 function show(step) {
-  $("hunt-name-form").hidden = step !== "name";
-  $("hunt-live").hidden = !(step === "show" || step === "place");
-  $("hunt-done").hidden = step !== "done";
+  $("add-name-form").hidden = step !== "name";
+  $("add-live").hidden = !(step === "show" || step === "place");
+  $("add-done").hidden = step !== "done";
+  if (TITLES[step]) $("add-step-title").textContent = TITLES[step];
   const i = STEPS.indexOf(step);
-  document.querySelectorAll("#hunt-steps li").forEach((li, k) => {
-    li.classList.toggle("on", k <= i);
+  document.querySelectorAll("#add-steps li").forEach((li, k) => {
+    li.classList.toggle("done", k < i);
     li.classList.toggle("now", k === i);
+    if (k === i) li.setAttribute("aria-current", "step"); else li.removeAttribute("aria-current");
   });
 }
 
 function say(text, tip = "") {
-  fx.typeIn($("hunt-say"), text);
-  $("hunt-tip").textContent = tip;
+  $("add-say").textContent = text;
+  $("add-tip").textContent = tip;
 }
 
 function feed(kind) {
   // kind: "laptop" | "room" | null
-  const img = $("hunt-feed"), cam = $("hunt-cam");
+  const img = $("add-feed"), cam = $("add-cam");
   const src = kind === "laptop" ? api.teachVideoUrl() : kind === "room" ? api.videoUrl() : null;
   if (!src) { img.removeAttribute("src"); img.dataset.src = ""; }
   else if (img.dataset.src !== src) { img.dataset.src = src; img.src = src; }
   img.hidden = !src;
   cam.classList.toggle("room", kind === "room");
-  $("hunt-cam-tag").textContent = kind === "room" ? "Room camera · click it if I pick the wrong thing" : "Laptop camera";
+  $("add-cam-tag").textContent = kind === "room" ? "Room camera (click the item if the box is on the wrong thing)" : "Laptop camera";
 }
 
 /* ---------------- start ---------------- */
 
 async function start(raw) {
   const name = raw.trim().toLowerCase().replace(/\s+/g, " ");
-  if (!name) { $("hunt-error").textContent = "Give it a name first."; return; }
-  if (!/^[a-z0-9][a-z0-9 '\-]*$/.test(name)) { $("hunt-error").textContent = "Letters, numbers and spaces only."; return; }
-  if (h.taught.includes(name)) { $("hunt-error").textContent = `"${name}" is already in your pack.`; return; }
+  if (!name) { $("add-error").textContent = "Please type a name first."; $("add-name").focus(); return; }
+  if (!/^[a-z0-9][a-z0-9 '\-]*$/.test(name)) { $("add-error").textContent = "Please use only letters, numbers and spaces."; return; }
+  if (h.taught.includes(name)) { $("add-error").textContent = `"${name}" is already one of your key items.`; return; }
   h.name = name; h.cancelled = false;
-  try { sfx.unlock(); sfx.swoosh("in", 0.3); } catch {}
+  try { sfx.unlock(); } catch {}
   show("show");
-  $("hunt-yesno").hidden = true;
+  $("add-yesno").hidden = true;
 
   if (api.mode === "live") {
-    $("hunt-capture").hidden = true;
-    say("Waking up the camera…");
+    $("add-capture").hidden = true;
+    say("Starting the camera…");
     feed("laptop");
     h.active = true;
-    try { await api.command(`this is my ${name}`); } catch { $("hunt-error").textContent = "Couldn't reach the app."; enter(); }
+    try { await api.command(`this is my ${name}`); } catch { $("add-error").textContent = "Couldn't reach the app."; enter(); }
   } else {
     await startWebcam();
   }
@@ -110,7 +113,7 @@ function onTeach(t) {
     const check = (n) => {
       if (h.taught.includes(h.name)) return finish(h.name, api.taughtPhoto(h.name));
       if (n > 0) return setTimeout(() => check(n - 1), 300);
-      if (!h.cancelled) { enter(); $("hunt-error").textContent = t.message || "Teaching stopped. Try again?"; }
+      if (!h.cancelled) { enter(); $("add-error").textContent = t.message || "Teaching stopped. Try again?"; }
     };
     check(6);
     return;
@@ -130,26 +133,25 @@ function onTeach(t) {
     show("place");
     feed("room");
   }
-  $("hunt-yesno").hidden = !(p === "confirm" || p === "learning");
+  $("add-yesno").hidden = !(p === "confirm" || p === "learning");
 }
 
 function tipFor(phase, laptop) {
-  if (phase === "looking") return laptop ? "Hold it inside the brackets and slowly turn it so every side shows." : "Hold it up to the room camera, or click on it in the picture.";
-  if (phase === "learning") return "Keep it in view a moment. Wrong thing? Press No.";
-  if (phase === "placing") return "Put it down where the room camera can see it, then step back.";
-  if (phase === "confirm") return "Is the box around the right thing?";
-  if (phase === "click") return "Click on it in the picture.";
+  if (phase === "looking") return laptop ? "Hold it inside the white corners and turn it slowly so every side shows." : "Hold it up to the room camera, or click on it in the picture.";
+  if (phase === "learning") return "Keep holding it still for a moment. If it picked the wrong thing, press \"No, try again\".";
+  if (phase === "placing") return "Put it where the room camera can see it, then step back.";
+  if (phase === "confirm") return "Is the red box around the right thing?";
+  if (phase === "click") return "Click on the item in the picture.";
   return "";
 }
 
 function answer(yes) {
-  try { sfx.press(); } catch {}
   if (api.mode === "live") { api.command(yes ? "yes" : "no").catch(() => {}); return; }
   if (yes) completeMock(); else { h.shots = []; startWebcam(); }
 }
 
 function clickFeed(e) {
-  if (api.mode !== "live" || !h.active || !$("hunt-cam").classList.contains("room")) return;
+  if (api.mode !== "live" || !h.active || !$("add-cam").classList.contains("room")) return;
   const img = e.currentTarget, r = img.getBoundingClientRect();
   if (!img.naturalWidth) return;
   // object-fit: cover: find where the click is on the camera's picture
@@ -158,13 +160,11 @@ function clickFeed(e) {
   const x = (e.clientX - r.left - (r.width - w) / 2) / w, y = (e.clientY - r.top - (r.height - hh) / 2) / hh;
   if (x < 0 || x > 1 || y < 0 || y > 1) return;
   fetch("/api/click", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ x, y }) });
-  try { sfx.tick(1.2); } catch {}
 }
 
 function cancel() {
   h.cancelled = true;
   if (api.mode === "live" && h.active) api.command("cancel").catch(() => {});
-  try { sfx.swoosh("out", 0.3); } catch {}
   enter();
 }
 
@@ -173,27 +173,27 @@ function cancel() {
 async function startWebcam() {
   show("show");
   feed(null);
-  $("hunt-yesno").hidden = true;
-  $("hunt-capture").hidden = false;
-  const v = $("hunt-video");
+  $("add-yesno").hidden = true;
+  $("add-capture").hidden = false;
+  const v = $("add-video");
   try {
     h.stream = h.stream || await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: false });
     v.srcObject = h.stream; v.hidden = false;
-    say(`Show me your ${h.name}.`, "Hold it inside the brackets, press Capture, then slowly turn it.");
+    say(`Hold your ${h.name} up to the camera.`, "Hold it inside the white corners, press \"Take the photos\", then turn it slowly.");
   } catch {
     v.hidden = true;
-    say("No webcam here.", "Demo mode: press Capture to add it without photos.");
+    say("No camera found on this computer.", "Press \"Take the photos\" to add it without a photo.");
   }
 }
 
 function stopWebcam() {
   if (h.stream) h.stream.getTracks().forEach((t) => t.stop());
   h.stream = null;
-  $("hunt-video").hidden = true;
+  $("add-video").hidden = true;
 }
 
 function grab() {
-  const v = $("hunt-video");
+  const v = $("add-video");
   if (!h.stream || !v.videoWidth) return null;
   const box = v.getBoundingClientRect();
   const scale = Math.max(box.width / v.videoWidth, box.height / v.videoHeight);
@@ -208,28 +208,29 @@ function grab() {
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function captureMock() {
-  $("hunt-capture").hidden = true;
-  const count = $("hunt-count");
-  for (let n = 3; n > 0; n--) { count.textContent = n; try { sfx.tick(0.8); } catch {} await wait(550); }
+  $("add-capture").hidden = true;
+  const count = $("add-count");
+  for (let n = 3; n > 0; n--) { count.textContent = n; await wait(700); }
   count.textContent = "";
-  $("hunt-cam").classList.add("capturing");
-  say("Slowly turn it…");
+  $("add-cam").classList.add("capturing");
+  say("Taking photos. Turn it slowly…");
   h.shots = [];
-  for (let i = 0; i < SHOTS; i++) { const s = grab(); if (s) h.shots.push(s); try { sfx.tick(1.3 + i * 0.05); } catch {} await wait(SHOT_GAP); }
-  $("hunt-cam").classList.remove("capturing");
+  for (let i = 0; i < SHOTS; i++) { const s = grab(); if (s) h.shots.push(s); await wait(SHOT_GAP); }
+  $("add-cam").classList.remove("capturing");
   // "Place it": pretend to find it in the room, then ask.
   show("place");
   stopWebcam();
-  const img = $("hunt-feed");
+  const img = $("add-feed");
   if (h.shots[0]) { img.src = h.shots[0]; img.hidden = false; img.dataset.src = ""; }
+  $("add-cam-tag").textContent = "Your photo";
   say("Now put it down where the room camera can see it…");
   await wait(1400);
-  say(`Is this your ${h.name}?`, "Demo mode: the room camera isn't connected, so this is your photo.");
-  $("hunt-yesno").hidden = false;
+  say(`Is this your ${h.name}?`, "Demo mode: the room camera isn't connected, so this is the photo you just took.");
+  $("add-yesno").hidden = false;
 }
 
 async function completeMock() {
-  $("hunt-yesno").hidden = true;
+  $("add-yesno").hidden = true;
   await api.teach(h.name, h.shots.length ? h.shots : [null]);
   finish(h.name, h.shots[0] || null);
 }
@@ -240,28 +241,12 @@ function finish(name, photo) {
   h.active = false;
   stopWebcam(); feed(null);
   show("done");
-  $("hunt-done-name").textContent = name;
-  $("hunt-done-name2").textContent = name;
-  const box = $("hunt-done").querySelector(".done-photo"), img = $("hunt-done-img");
+  $("add-done-name").textContent = name;
+  $("add-done-name2").textContent = name;
+  const box = $("add-done").querySelector(".done-photo"), img = $("add-done-img");
   box.classList.remove("no-photo");
   img.onerror = () => { box.classList.add("no-photo"); img.removeAttribute("src"); };
   if (photo) img.src = photo; else img.onerror();
-  try { sfx.shing(); } catch {}
-  spark(box);
+  try { sfx.added(); } catch {}
   if (h.onDone) h.onDone(name);
-}
-
-// A red spark leaves the photo and flies off toward the Pack (to the right).
-function spark(from) {
-  if (fx.reduced) return;
-  const r = from.getBoundingClientRect();
-  const s = document.createElement("div");
-  s.className = "spark";
-  Object.assign(s.style, { position: "fixed", left: `${r.left + r.width / 2}px`, top: `${r.top + r.height / 2}px`, width: "10px", height: "10px",
-    borderRadius: "50%", background: "#ff3b3b", boxShadow: "0 0 18px 6px rgba(255,46,46,0.8)", zIndex: 40, pointerEvents: "none" });
-  document.body.appendChild(s);
-  s.animate([
-    { transform: "translate(-50%,-50%) scale(1)", opacity: 1 },
-    { transform: `translate(${innerWidth * 0.35}px, ${-innerHeight * 0.45}px) scale(0.3)`, opacity: 0 },
-  ], { duration: 1300, easing: "cubic-bezier(0.5, 0, 0.2, 1)", delay: 300 }).finished.then(() => s.remove());
 }

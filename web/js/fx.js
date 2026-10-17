@@ -438,10 +438,10 @@ function initEyes() {
 
 /* ============================ Start ============================ */
 
-export function init({ grid = true } = {}) {
+export function init({ grid = true, cursor = true, sounds = true } = {}) {
   if (grid) initGrid();
-  initCursor();
-  initSounds();
+  if (cursor) initCursor();
+  if (sounds) initSounds();
   initWipeLabels();
   initSpotlight();
   initEyes();

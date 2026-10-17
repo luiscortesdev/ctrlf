@@ -5,12 +5,12 @@
 Three pages, plain HTML/CSS/JS, no build step. Every library and font is in `vendor/`, so it works with no internet.
 
 - `index.html`: the ~18 second 3D intro (three.js + GSAP). Plays once, then goes to the dashboard.
-- `dashboard.html`: **the forest.** A low-poly night forest (three.js) with a guide wolf at a fork:
-  - **The Hunt** (left path): teach a new key item. Name it → show it to the laptop camera → place it ("is this it?") → done.
-  - **The Pack** (right path): your key items (only things you taught), with a photo, last seen and where. Click one to find it.
-  - **The Watch**: asking (the bar at the bottom, on every screen) flies up to the live view with the laser on the item.
-  - The camera follows the wolf down the path you pick, then rises into the night sky where the panel opens. Arrow keys + Enter pick a path, Esc goes back.
-- `classic.html`: the previous dashboard (live feed, status, last seen, activity). Linked as "Classic" in the corner.
+- `dashboard.html`: **the app.** One page, built to be simple for anyone (big text, big buttons with words, strong contrast). The night forest (three.js) only drifts slowly in the background. Three views fade in place:
+  - **Home**: "What are you looking for?" with a large search box, a red **Find** button and **Ask out loud** (push-to-talk, hidden when the app's voice is off). Typing just "keys" asks "where is my keys". Below it, **Your key items**: a photo card for each thing you taught, with where it is, "Seen N minutes ago" and a status in words ("In view now" / "Out of sight" / "Not seen yet"). Each card has **Find** and **Remove** (Remove asks first). **+ Add a key item** starts teaching; with nothing taught yet there's one big "Add your first key item" button.
+  - **Add a key item**: a 3-step guide (1 Name it, 2 Show it, 3 Place it) with big Yes/No buttons, ending in "Done! X is now a key item."
+  - **Find**: a big headline ("Found your keys" / "Your keys are out of sight" / "Not found"), the answer as one sentence, the room camera with the laser drawn on the item, a checklist (Heard you / Found it / Pointing / Done), the last-seen photo when it's out of sight, and a big **Done** button. In demo mode the browser speaks the answer; with the app running, the app's own speaker does.
+  - Header: logo, connection ("Connected" / "Demo mode"), "Sound: On/Off". Footer: "Replay intro", "Classic view".
+- `classic.html`: the previous dashboard (live feed, status, last seen, activity). Linked as "Classic view" in the footer.
 
 ## Run it
 
@@ -42,13 +42,14 @@ Launch Chrome with autoplay allowed so the intro plays with sound immediately:
 
 Without the flag, the intro shows a "Begin" button first (one click unlocks audio).
 
-All sounds are generated in code (`js/sound.js`), so there are no audio files to download or license.
+Sounds are recorded clips in `audio/` from [UI SFX](https://uisfx.com) (CC0, public domain: `audio/LICENSE.txt`): the "Sci-fi" pack and the "Cinematic" pack. The intro uses many of them; the app page only plays four: found, added, removed and not found. `js/sound.js` has one function per sound; to change one, replace its file in `audio/`.
 
 ## Look and feel
 
 - **Brand** (`js/brand.js`): the wolf mark, app icon and "wherewolf." wordmark as inline SVG, traced from the logo. Put `<span data-brand="mark|wordmark|lockup|icon"></span>` anywhere and it's filled in. Favicon: `img/favicon.svg`.
-- **Type** (`vendor/fonts`, SIL OFL): Hubot Sans for headings and buttons, Mona Sans for text, Monaspace Krypton for data.
-- **Effects** (`js/fx.js`): the laser-dot cursor and its spark trail, the dot-grid background that bends toward the cursor (plus a slow scan line and ripples when something is found), hover/press sounds, text scramble, dialogs that grow out of the button that opened them, and the logo's eyes following the cursor. To turn one off, delete its line in `init()` at the bottom of the file. "Reduce motion" in the OS turns the motion off automatically.
+- **Type** (`vendor/fonts`, SIL OFL): Atkinson Hyperlegible Next everywhere, by the Braille Institute, made so similar letters (1 I l, 0 O) are easy to tell apart. Easy to read for older eyes.
+- **Accessibility** (`css/app.css`): 18px base text, buttons at least 52–64px tall with words (no icon-only or hover-only controls), text contrast 11:1 (small text at least 7:1), visible focus rings, "Reduce motion" respected, phone layout at 720px and under.
+- **Effects** (`js/fx.js`): the laser-dot cursor and its spark trail, the dot-grid background that bends toward the cursor (plus a slow scan line and ripples when something is found), hover/press sounds, text scramble, dialogs that grow out of the button that opened them, and the logo's eyes following the cursor. To turn one off, delete its line in `init()` at the bottom of the file. "Reduce motion" in the OS turns the motion off automatically. These are for the intro and the classic view; the app page turns them all off (`fx.init({ grid: false, cursor: false, sounds: false })` in `js/world/main.js`) for a normal cursor and no hover/click sounds.
 - **Hover styles** (classes in `css/base.css`): `fx-wipe` (laser wipe + scramble, primary buttons), `fx-brackets` (corner brackets lock on, secondary buttons and chips), `fx-ripple` (the mic), `fx-spot` (red spotlight border that follows the cursor, cards and rows).
 
 ## Handy URLs
@@ -69,11 +70,11 @@ All sounds are generated in code (`js/sound.js`), so there are no audio files to
 | Colors, fonts | `css/base.css`: the `:root` variables |
 | Logo | `js/brand.js` |
 | Cursor, background, hover effects | `js/fx.js` + the `fx-*` classes in `css/base.css` |
-| Forest scene: trees, paths, wolf, moon, camera moves | `js/world/forest.js` (`FORK` and `SKY` set where the camera goes) |
-| Forest pages: panels, ask bar, live view | `dashboard.html` + `css/world.css` + `js/world/main.js` |
-| The Hunt (teaching steps) | `js/world/hunt.js` |
+| Background forest: trees, beacon, moon, slow drift | `js/world/forest.js` (`drift(true)` turns on the slow background motion) |
+| App page: home, search, key item cards, find view | `dashboard.html` + `css/app.css` + `js/world/main.js` |
+| Adding a key item (teaching steps) | `js/world/add.js` |
 | Classic dashboard layout | `classic.html` + `css/dashboard.css` |
 | Sounds | `js/sound.js`: one function per sound |
 | Backend connection | `js/api.js` (the only file that talks to the app) and `src/web.py` in the repo |
 | Classic teach mode | `js/teach.js` |
-| Arrival animation after the intro (the red collapses into the wolf's eye) | `arrive()` in `js/world/main.js` |
+| Arrival animation after the intro (the red shrinks into the beacon) | `arrive()` in `js/world/main.js` |

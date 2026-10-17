@@ -1,14 +1,15 @@
-// The wherewolf world: a low-poly night forest with a fork, two paths, a guide wolf,
-// and a camera that walks the paths and rises into the sky. Everything is built in
-// code (no model files). main.js drives it; this file only knows about the 3D scene.
+// The wherewolf world: a low-poly night forest with a fork and two paths, and a camera
+// that travels down a path and rises into the sky. Everything is built in code (no model
+// files). main.js drives it; this file only knows about the 3D scene.
 //
 //   init(canvas)            build the scene, start rendering
-//   setHover("hunt"|"pack"|null)   light up a path, the wolf looks that way
-//   go("hunt"|"pack")       the wolf trots down that path, the camera follows, then rises
-//   fly("hunt"|"pack"|"live")  glide through the sky to another sky spot
+//   setHover("add"|"items"|null)   light up a path
+//   go("add"|"items")       the camera travels down that path, then rises into the sky
+//   fly("add"|"items"|"live")  glide through the sky to another sky spot
 //   home()                  back to the fork
-//   onPick(fn)              fn("hunt"|"pack") when a path is hovered (or null) / clicked
-//   screenPoint(name)       where something is on screen ("eye", "hunt", "pack")
+//   onPick(fn) / onHover(fn)   fn("add"|"items") when a path is clicked / hovered (or null)
+//   screenPoint(name)       where something is on screen ("beacon", "add", "items")
+//   drift(on)               background mode: no paths to pick, the camera just drifts slowly
 
 import * as THREE from "three";
 
@@ -18,9 +19,11 @@ const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 let renderer, scene, camera, clock;
 const look = new THREE.Vector3();
 const paths = {};      // name -> { curve, ribbon, hit, flies, label point }
-let wolf, hovered = null, place = "fork", busy = false;
+let beacon, hovered = null, place = "fork", busy = false;
 const listeners = { hover: [], pick: [] };
 
+let drifting = false, driftStart = null;
+export function drift(on = true) { drifting = on; driftStart = null; }
 export function onPick(fn) { listeners.pick.push(fn); }
 export function onHover(fn) { listeners.hover.push(fn); }
 export const where = () => place;
@@ -29,7 +32,7 @@ export const isBusy = () => busy;
 /* ------------------------------------------------------------------ helpers */
 
 const COL = {
-  fog: 0x0e1a28, ground: 0x0e1b22, path: 0x4a5c63, bone: 0xbab8b3, ink: 0x1a191c,
+  fog: 0x0e1a28, ground: 0x0e1b22, path: 0x4a5c63,
   trees: [0x123a3a, 0x15303d, 0x1b4246, 0x0f2a33, 0x1f474a, 0x173a44],
 };
 
@@ -75,67 +78,6 @@ function ribbon(c, width, y, material) {
   return new THREE.Mesh(g, material);
 }
 
-/* ------------------------------------------------------------------ the wolf */
-
-function buildWolf() {
-  const mat = new THREE.MeshStandardMaterial({ color: COL.bone, roughness: 0.85, flatShading: true });
-  const ink = new THREE.MeshStandardMaterial({ color: COL.ink, roughness: 0.6, flatShading: true });
-  const w = new THREE.Group();           // faces -z
-  const body = new THREE.Group(); w.add(body);
-
-  const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.27, 0.95, 6), mat);
-  torso.rotation.x = Math.PI / 2; torso.position.set(0, 0.62, 0.02); body.add(torso);
-  const chest = new THREE.Mesh(new THREE.IcosahedronGeometry(0.27, 0), mat);
-  chest.scale.set(1, 1.1, 1); chest.position.set(0, 0.66, -0.42); body.add(chest);
-
-  const head = new THREE.Group(); head.position.set(0, 0.92, -0.62); body.add(head);
-  const skull = new THREE.Mesh(new THREE.IcosahedronGeometry(0.19, 0), mat);
-  skull.scale.set(1, 0.9, 1.05); head.add(skull);
-  const snout = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.32, 5), mat);
-  snout.rotation.x = -Math.PI / 2; snout.position.set(0, -0.05, -0.24); head.add(snout);
-  const nose = new THREE.Mesh(new THREE.TetrahedronGeometry(0.04, 0), ink);
-  nose.position.set(0, -0.04, -0.4); head.add(nose);
-  for (const s of [-1, 1]) {
-    const ear = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.2, 4), mat);
-    ear.position.set(0.1 * s, 0.2, 0.02); ear.rotation.z = -0.25 * s; head.add(ear);
-  }
-  // The logo's eyes: one dark, one red (the red one glows a little).
-  const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 6), ink);
-  eyeL.position.set(-0.09, 0.03, -0.14); head.add(eyeL);
-  const eye = new THREE.Mesh(new THREE.SphereGeometry(0.034, 10, 8), new THREE.MeshBasicMaterial({ color: 0xff2e2e }));
-  eye.position.set(0.09, 0.03, -0.14); head.add(eye);
-  const eyeGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture("rgba(255,46,46,1)", "rgba(255,46,46,0)"), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.9 }));
-  eyeGlow.scale.setScalar(0.32); eye.add(eyeGlow);
-
-  const legs = [];
-  for (const [x, z] of [[-0.13, -0.38], [0.13, -0.38], [-0.13, 0.36], [0.13, 0.36]]) {
-    const hip = new THREE.Group(); hip.position.set(x, 0.55, z); body.add(hip);
-    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.035, 0.55, 5), mat);
-    leg.position.y = -0.27; hip.add(leg); legs.push(hip);
-  }
-  const tailPivot = new THREE.Group(); tailPivot.position.set(0, 0.7, 0.48); body.add(tailPivot);
-  const tail = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.5, 5), mat);
-  tail.rotation.x = Math.PI * 0.68; tail.position.set(0, -0.12, 0.2); tailPivot.add(tail);
-
-  w.traverse((o) => { if (o.isMesh) o.castShadow = false; });
-  w.userData = { head, legs, tailPivot, eye, body, gait: 0, trot: 0, lookYaw: 0, lookPitch: 0 };
-  return w;
-}
-
-function animateWolf(t, dt) {
-  const u = wolf.userData;
-  // Legs swing while trotting; idle breathing otherwise.
-  u.gait += dt * (6 + 8 * u.trot);
-  const swing = Math.sin(u.gait) * 0.65 * u.trot;
-  u.legs[0].rotation.x = swing; u.legs[3].rotation.x = swing;
-  u.legs[1].rotation.x = -swing; u.legs[2].rotation.x = -swing;
-  u.body.position.y = Math.abs(Math.sin(u.gait)) * 0.05 * u.trot + Math.sin(t * 1.6) * 0.008 * (1 - u.trot);
-  u.tailPivot.rotation.y = Math.sin(t * 2.2) * 0.25;
-  u.tailPivot.rotation.x = -0.2 * u.trot;
-  u.head.rotation.y += (u.lookYaw - u.head.rotation.y) * Math.min(1, dt * 6);
-  u.head.rotation.x += (u.lookPitch - u.head.rotation.x) * Math.min(1, dt * 5);
-}
-
 /* ------------------------------------------------------------------ build the world */
 
 export function init(canvas) {
@@ -171,7 +113,7 @@ export function init(canvas) {
 
   // Moon, with a soft halo
   const moon = new THREE.Mesh(new THREE.IcosahedronGeometry(7, 1), new THREE.MeshBasicMaterial({ color: 0xf1ede2, fog: false }));
-  moon.position.set(-64, 58, -150); scene.add(moon);
+  moon.position.set(66, 40, -150); scene.add(moon);
   const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture("rgba(190,210,255,0.55)", "rgba(190,210,255,0)"), fog: false, depthWrite: false, transparent: true, blending: THREE.AdditiveBlending }));
   halo.scale.setScalar(80); halo.position.copy(moon.position); scene.add(halo);
 
@@ -182,11 +124,11 @@ export function init(canvas) {
   moonLight.position.copy(moon.position).normalize().multiplyScalar(50); scene.add(moonLight);
 
   // Paths: a short trunk from the camera to the fork, then two branches.
-  paths.hunt = { curve: curve([[0, 2.2], [-2.2, -2.5], [-5.6, -9], [-8.5, -16], [-9.5, -24], [-8.5, -32]]) };
-  paths.pack = { curve: curve([[0, 2.2], [2.2, -2.5], [5.6, -9], [8.5, -16], [9.5, -24], [8.5, -32]]) };
+  paths.add = { curve: curve([[0, 2.2], [-2.2, -2.5], [-5.6, -9], [-8.5, -16], [-9.5, -24], [-8.5, -32]]) };
+  paths.items = { curve: curve([[0, 2.2], [2.2, -2.5], [5.6, -9], [8.5, -16], [9.5, -24], [8.5, -32]]) };
   const trunk = curve([[0, 12], [0, 6], [0, 2.2]]);
   const samples = [];
-  for (const c of [trunk, paths.hunt.curve, paths.pack.curve]) for (let i = 0; i <= 160; i++) samples.push(c.getPointAt(i / 160));
+  for (const c of [trunk, paths.add.curve, paths.items.curve]) for (let i = 0; i <= 160; i++) samples.push(c.getPointAt(i / 160));
 
   // Ground: low-poly, bumpy except along the paths.
   const gg = new THREE.PlaneGeometry(160, 160, 80, 80); gg.rotateX(-Math.PI / 2);
@@ -200,13 +142,13 @@ export function init(canvas) {
 
   const pathMat = () => new THREE.MeshStandardMaterial({ color: COL.path, roughness: 1, emissive: 0xff2e2e, emissiveIntensity: 0 });
   scene.add(ribbon(trunk, 1.5, 0.04, new THREE.MeshStandardMaterial({ color: COL.path, roughness: 1 })));
-  for (const name of ["hunt", "pack"]) {
+  for (const name of ["add", "items"]) {
     const p = paths[name];
     p.ribbon = ribbon(p.curve, 1.4, 0.05, pathMat()); scene.add(p.ribbon);
     p.hit = ribbon(p.curve, 5.5, 0.3, new THREE.MeshBasicMaterial({ visible: false })); p.hit.userData.path = name; scene.add(p.hit);
     p.labelAt = p.curve.getPointAt(0.3).clone().setY(2.6);
     // Red laser-dot fireflies along the path
-    const fr = rand(name === "hunt" ? 11 : 13), fpos = [], base = [];
+    const fr = rand(name === "add" ? 11 : 13), fpos = [], base = [];
     for (let i = 0; i < 46; i++) {
       const q = p.curve.getPointAt(0.06 + 0.92 * (i / 46)), side = (fr() - 0.5) * 2.4;
       const t = p.curve.getTangentAt(0.06 + 0.92 * (i / 46));
@@ -254,10 +196,15 @@ export function init(canvas) {
     sp.userData.v = 0.2 + fgr() * 0.4; scene.add(sp); fogs.push(sp);
   }
 
-  // The guide wolf, sitting at the fork looking at you.
-  wolf = buildWolf();
-  wolf.scale.setScalar(1.35);
-  wolf.position.set(0, 0, 3.4); wolf.rotation.y = Math.PI; scene.add(wolf);
+  // The beacon: a red laser dot hovering where the paths split (the intro lands in it).
+  beacon = new THREE.Group(); beacon.position.set(0, 0.8, 3.2); scene.add(beacon);
+  const core = new THREE.Mesh(new THREE.SphereGeometry(0.07, 16, 12), new THREE.MeshBasicMaterial({ color: 0xff3b3b }));
+  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture("rgba(255,46,46,1)", "rgba(255,46,46,0)"), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.85 }));
+  glow.scale.setScalar(0.9);
+  const pool = new THREE.Mesh(new THREE.CircleGeometry(0.6, 32), new THREE.MeshBasicMaterial({ map: glowTexture("rgba(255,46,46,0.5)", "rgba(255,46,46,0)"), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+  pool.rotation.x = -Math.PI / 2; pool.position.y = -0.73;
+  beacon.add(core, glow, pool);
+  beacon.userData = { glow, pool };
 
   setCamera(FORK.pos, FORK.look);
 
@@ -266,7 +213,7 @@ export function init(canvas) {
   const pick = (e) => {
     ndc.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
     ray.setFromCamera(ndc, camera);
-    const hit = ray.intersectObjects([paths.hunt.hit, paths.pack.hit])[0];
+    const hit = ray.intersectObjects([paths.add.hit, paths.items.hit])[0];
     return hit ? hit.object.userData.path : null;
   };
   canvas.addEventListener("pointermove", (e) => {
@@ -290,7 +237,7 @@ export function init(canvas) {
     if (document.hidden) return;
     const dt = Math.min(0.05, (now - last) / 1000); last = now;
     const t = now / 1000;
-    for (const name of ["hunt", "pack"]) {
+    for (const name of ["add", "items"]) {
       const fl = paths[name].flies, a = fl.geometry.attributes.position, b = fl.userData.base;
       for (let i = 0; i < a.count; i++) a.setY(i, b[i * 2] + Math.sin(t * 1.3 + b[i * 2 + 1]) * 0.18);
       a.needsUpdate = true;
@@ -302,7 +249,16 @@ export function init(canvas) {
     }
     for (const f of fogs) { f.position.x += f.userData.v * dt; if (f.position.x > 28) f.position.x = -28; }
     stars.rotation.y = t * 0.004;
-    animateWolf(t, dt);
+    // Background mode: the camera drifts slowly, like standing at the edge of the forest.
+    if (drifting && place === "fork" && !busy && !reduced) {
+      if (driftStart === null) driftStart = t;
+      const d = t - driftStart;
+      camera.position.set(FORK.pos.x + Math.sin(d * 0.06) * 1.4, FORK.pos.y + Math.sin(d * 0.09) * 0.2, FORK.pos.z - Math.sin(d * 0.045) * 0.8);
+      look.set(FORK.look.x + Math.sin(d * 0.05) * 2, FORK.look.y, FORK.look.z);
+      camera.lookAt(look);
+    }
+    beacon.children[0].position.y = beacon.children[1].position.y = Math.sin(t * 1.6) * 0.06;
+    beacon.userData.glow.material.opacity = 0.7 + Math.sin(t * 3.1) * 0.15;
     renderer.render(scene, camera);
   });
 }
@@ -311,8 +267,8 @@ export function init(canvas) {
 
 const FORK = { pos: new THREE.Vector3(0, 2.1, 10.5), look: new THREE.Vector3(0, 1.1, -3) };
 const SKY = {
-  hunt: { pos: new THREE.Vector3(-9, 15, -22), look: new THREE.Vector3(-9, 16.5, -60) },
-  pack: { pos: new THREE.Vector3(9, 15, -22), look: new THREE.Vector3(9, 16.5, -60) },
+  add: { pos: new THREE.Vector3(-9, 15, -22), look: new THREE.Vector3(-9, 16.5, -60) },
+  items: { pos: new THREE.Vector3(9, 15, -22), look: new THREE.Vector3(9, 16.5, -60) },
   live: { pos: new THREE.Vector3(0, 17, -12), look: new THREE.Vector3(0, 18.5, -50) },
 };
 
@@ -331,42 +287,26 @@ function tweenCamera(toPos, toLook, duration, ease = "power2.inOut") {
 export function setHover(name) {
   if (place !== "fork" || busy) name = null;
   hovered = name;
-  const u = wolf.userData;
-  u.lookYaw = name === "hunt" ? -0.75 : name === "pack" ? 0.75 : 0;  // (it faces the camera)
-  u.lookPitch = 0;
 }
 
-// The wolf trots down the path; the camera follows a few steps behind, then rises.
+// The camera travels down the path at eye height, then rises above the trees.
 export async function go(name) {
   if (busy || place !== "fork") return;
-  busy = true; hovered = null; setHover(null);
-  const c = paths[name].curve, u = wolf.userData;
+  busy = true; setHover(null);
+  const c = paths[name].curve;
   if (reduced) { place = name; setCamera(SKY[name].pos, SKY[name].look); busy = false; return; }
 
-  // 1. The wolf turns toward the path, then sets off.
-  const startYaw = wolf.rotation.y, tan0 = c.getTangentAt(0.02);
-  const yaw = Math.atan2(-tan0.x, -tan0.z);
-  await new Promise((r) => gsap.to(wolf.rotation, { y: yaw, duration: 0.45, ease: "power2.inOut", onComplete: r }));
-  u.lookYaw = 0;
-
-  // 2. Walk: the wolf leads by a few meters, the camera follows at eye height.
-  const o = { s: 0 }, lead = 0.11, camPos = new THREE.Vector3(), target = new THREE.Vector3(), wp = new THREE.Vector3();
+  const o = { s: 0 }, camPos = new THREE.Vector3(), target = new THREE.Vector3();
   const start = camera.position.clone(), startLook = look.clone();
-  await new Promise((r) => gsap.to(o, { s: 0.78, duration: 3.1, ease: "power1.inOut", onUpdate: () => {
-    const ws = Math.min(1, o.s + lead);
-    wp.copy(c.getPointAt(ws)); wolf.position.set(wp.x, 0, wp.z);
-    const t = c.getTangentAt(ws); wolf.rotation.y = Math.atan2(-t.x, -t.z);
-    u.trot = Math.min(1, o.s * 8);
-    camPos.copy(c.getPointAt(o.s)).setY(1.7);
-    target.copy(c.getPointAt(Math.min(1, o.s + 0.16))).setY(0.9);
-    const k = Math.min(1, o.s * 5);                       // ease in from the fork view
+  await new Promise((r) => gsap.to(o, { s: 0.74, duration: 2.6, ease: "power2.inOut", onUpdate: () => {
+    camPos.copy(c.getPointAt(o.s)).setY(1.6 + o.s * 1.4);
+    target.copy(c.getPointAt(Math.min(1, o.s + 0.18))).setY(1.2 + o.s * 2);
+    const k = Math.min(1, o.s * 4);                       // ease in from the fork view
     camera.position.lerpVectors(start, camPos, k); look.lerpVectors(startLook, target, k); camera.lookAt(look);
   }, onComplete: r }));
 
-  // 3. The wolf stops and looks up at the sky; the camera rises above the trees.
-  u.trot = 0; u.lookPitch = 0.6;
   place = name;
-  await tweenCamera(SKY[name].pos, SKY[name].look, 2.0, "power2.inOut");
+  await tweenCamera(SKY[name].pos, SKY[name].look, 1.8, "power2.inOut");
   busy = false;
 }
 
@@ -386,26 +326,15 @@ export async function fly(to) {
   place = to; busy = false;
 }
 
-// Back to the fork: glide over, then come down; the wolf is waiting there again.
+// Back to the fork: glide over, then come down.
 export async function home() {
   if (busy || place === "fork") return;
   busy = true;
-  const u = wolf.userData;
-  wolf.position.set(0, 0, 3.4); wolf.rotation.y = Math.PI; u.lookPitch = 0; u.lookYaw = 0; u.trot = 0;
   await tweenCamera(new THREE.Vector3(0, 13, 14), new THREE.Vector3(0, 8, -20), reduced ? 0 : 1.1, "power2.in");
   await tweenCamera(FORK.pos, FORK.look, reduced ? 0 : 1.3, "power2.out");
   place = "fork"; busy = false;
 }
 
-// The wolf lifts its head and howls (main.js plays the sound).
-export function howl() {
-  if (reduced) return;
-  const u = wolf.userData;
-  u.lookPitch = 0.75;
-  setTimeout(() => { u.lookPitch = 0; }, 1800);
-}
-
-// Screen position (CSS pixels) of the wolf's red eye or a path label.
 // Narrow (phone) screens: widen the view so both paths still fit.
 function fitFov() {
   const a = innerWidth / innerHeight, wide = 1.6;
@@ -414,9 +343,10 @@ function fitFov() {
   return Math.min(v, 72);
 }
 
+// Screen position (CSS pixels) of the beacon or a path label.
 export function screenPoint(what) {
   const v = new THREE.Vector3();
-  if (what === "eye") wolf.userData.eye.getWorldPosition(v);
+  if (what === "beacon") beacon.children[0].getWorldPosition(v);
   else v.copy(paths[what].labelAt);
   v.project(camera);
   return { x: (v.x * 0.5 + 0.5) * innerWidth, y: (-v.y * 0.5 + 0.5) * innerHeight, visible: v.z < 1 };
