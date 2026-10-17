@@ -14,7 +14,13 @@ drives the servos and the laser.
   to the laptop camera, then show it to the room camera and answer "is this it?". It
   finds them by how they look, so it's YOUR keys, not anything key-like, and it keeps
   learning how they look wherever they're put down.
-- **Ask out loud**: push-to-talk (SPACE) with local Whisper, or type the question.
+- **Ask out loud**: push-to-talk (SPACE), or type the question. Gemini hears the
+  recording and works out what you mean ("did you see where I put my AirPods?", "and my
+  wallet?", "nah, wrong one"), then the answer is spoken in Gemini's voice. Gemini only
+  picks the action; where things are always comes from the camera's memory. Local
+  Whisper and the Mac's voice take over when there's no Wi-Fi or Gemini is slow.
+- **Phone alerts**: when your phone says you've left home (an iPhone Shortcut), it checks
+  the room for your keys, wallet, ID and earbuds and pushes what you forgot to your phone.
 - **Points with the laser**: aims, watches its own dot through the camera, and corrects.
 - **Steady live view**: boxes are tracked from pass to pass and glide with the video.
 
@@ -31,7 +37,9 @@ drives the servos and the laser.
 | `src/vision/laser_tracker.py` | Finds the laser dot, pixel-to-angle calibration, closed-loop aiming |
 | `src/vision/camera.py` | Opening the camera (iPhone, Mac, or a network stream) and reconnecting |
 | `src/hardware/serial_client.py` | Serial link to the ESP32 |
-| `src/voice.py` | Push-to-talk speech to text (mlx-whisper) |
+| `src/voice.py` | Push-to-talk (Gemini, with mlx-whisper as the fallback) and speaking the answers |
+| `src/gemini.py` | Gemini: understands the spoken question, speaks the answer |
+| `src/phone.py` | Phone alerts through ntfy.sh when you leave home without something |
 | `scripts/camera_test.py` | Live view with boxes, for tuning thresholds |
 | `scripts/calibrate.py` | Laser calibration sweep (writes `data/calibration.json`) |
 | `firmware/esp32_controller/` | ESP32-S3 firmware: smooth servo glides, anti-backlash, laser auto-off |
@@ -44,7 +52,11 @@ drives the servos and the laser.
 source venv/bin/activate
 pip install -r requirements.txt
 python scripts/cache_models.py                      # OWLv2 + Whisper, ~1.1 GB, once
+echo "GEMINI_API_KEY=your-key" > .env                # from aistudio.google.com; never commit it
 ```
+
+Without a Gemini key it still works, offline: Whisper hears the questions and the Mac's
+`say` answers (or set `GEMINI = False` in `src/app.py`).
 
 ## Run
 
@@ -60,7 +72,8 @@ Camera: the iPhone through Continuity Camera is the default (`CAMERA = 1` in
 `src/app.py`); it falls back to the Mac's camera. In the video window: SPACE = ask out
 loud, T = teach something, D = only look at a desk area, Esc = quit. Typed commands:
 `where are my keys?`, `learn this`, `forget keys`, `call it ball` (rename what was just
-taught), `list`, `wipe`, `servo 90 120`, `laser on` / `laser off`, `save`, `quit`.
+taught), `list`, `wipe`, `servo 90 120`, `laser on` / `laser off`, `save`, `phone` (alert
+setup), `phone test`, `left home`, `quit`.
 
 Tests: `pytest`.
 

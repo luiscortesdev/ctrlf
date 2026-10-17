@@ -40,11 +40,15 @@ Or type in the Terminal window (not the video window):
                            down where the room camera sees it, and answer "is this it?"
                            (yes / no, Y / N). Or click on it in the video.
     forget retainer case   forget a taught thing: what it looks like and where it was
+    phone                  set up alerts on your phone for things you leave behind (phone.py)
+    phone test             send a test alert
+    left home              act as if your phone said you left home
 In the video window: D, then click two corners = only look at the desk (D again = all).
     quit                   (or press Esc in the video window)
 
 """
 
+import collections
 import glob
 import json
 import math
@@ -82,6 +86,15 @@ TILES = (2, 2)
 TILE_SIZE = 640
 DISPLAY_W = 1280           # width of the live view window
 VOICE = True               # SPACE in the video window = push-to-talk (needs mlx-whisper)
+# Gemini hears the questions and says the answers (src/gemini.py; needs GEMINI_API_KEY in .env
+# and internet). It falls back to Whisper and the Mac's voice by itself. False = those only.
+GEMINI = True
+# Phone alerts (src/phone.py): when your phone says you've left home, it looks for these for
+# LEAVE_LOOK_SECS, and whatever is still sitting in the room gets pushed to your phone.
+# Type "phone" in the app for the setup. False = off.
+PHONE = True
+ESSENTIALS = ["keys", "wallet", "id card", "earbuds case"]
+LEAVE_LOOK_SECS = 6
 
 # What it looks for -> words people might use when asking.
 # Add anything: the detector recognizes objects from their names.
@@ -132,6 +145,7 @@ STILL_FRAC = 0.03     # how far it can wiggle (fraction of image width) and stil
 MOVED_FRAC = 0.05     # how far it must move (fraction of image width) for a new snapshot
 SIZE_FRAC = 0.25      # ...or this fraction of its own size, if bigger (a chair's box wobbles)
 VISIBLE_SECS = 3.0    # seen this recently = "it's here right now"
+PRESENT_SECS = 15     # answers: seen this recently = "your keys are ...", not "I last saw them"
 TEACH_SECS = 4.0      # how long it collects pictures of something you're showing it
 # Teach with the Mac's own camera: hold things up to the laptop, then put them down where
 # the room camera sees them (it finds them, asks "is this it?", and learns that view too).
@@ -282,6 +296,11 @@ def _far(a, b):
     """Are two boxes far apart (more than twice the bigger one's size)?"""
     size = max(a[2] - a[0], a[3] - a[1], b[2] - b[0], b[3] - b[1])
     return math.dist(((a[0] + a[2]) / 2, (a[1] + a[3]) / 2), ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)) > 2 * size
+
+
+def join_words(words, last="and"):
+    """['keys', 'wallet', 'id card'] -> 'keys, wallet and id card'."""
+    return words[0] if len(words) == 1 else ", ".join(words[:-1]) + f" {last} {words[-1]}"
 
 
 def plural(label):
@@ -539,10 +558,70 @@ def answer(label, obj, visible, mem, now):
     return f"I last saw your {label} {ago(now - obj['last_seen'])}, {where}."
 
 
+SPEAKER = None  # voice.Speaker once the app is running
+CONVERSATION = collections.deque(maxlen=8)  # (time, "Person: ..." / "Device: ...") for Gemini
+CONVERSATION_SECS = 120  # older lines are old news
+
+
 def say(text):
     print(f"\n>> {text}")
-    if sys.platform == "darwin":
+    CONVERSATION.append((time.time(), f"Device: {text}"))
+    if SPEAKER:
+        SPEAKER.say(text)
+    elif sys.platform == "darwin":
         subprocess.Popen(["say", text])  # the Mac's built-in voice
+
+
+TEACH_STATES = {  # what it's doing while learning something, for Gemini
+    "first name": "About to learn something new: it asked what it's called.",
+    "naming": "It just learned how something looks and asked what it's called.",
+    "looking": "Learning the {name}: waiting to be shown it (held up, or clicked on).",
+    "learning": "Learning how the {name} looks. If it's looking at the wrong thing, they say no.",
+    "placing": "Learning the {name}: it asked to be shown it in the room.",
+    "confirm": "Learning the {name}: it asked if the thing it found is it (yes or no).",
+    "click": "Learning the {name}: waiting for a click on it in the video.",
+}
+
+
+def voice_context(app):
+    """What Gemini needs to know to understand a question (gemini.describe_context)."""
+    t = app.teach
+    now = time.time()
+    return {"objects": {label: list(words) for label, words in list(OBJECTS.items())},
+            "taught": list(TAUGHT),
+            "doing": TEACH_STATES.get(t["phase"], "").format(name=t["name"] or "new thing") if t else "",
+            "conversation": [line for when, line in list(CONVERSATION) if now - when < CONVERSATION_SECS]}
+
+
+def voice_commands(meaning):
+    """Gemini's actions -> what App.command() understands (the same as typing them).
+    A chat reply is said right away."""
+    actions = [(a["do"], (a.get("thing") or "").strip().lower()) for a in meaning["actions"]]
+    named = [thing for do, thing in actions if do == "name" and thing]
+    if named and any(do == "teach" and not thing for do, thing in actions):
+        # "learn this, it's my retainer case" can come back as teach + name
+        actions = [(do, named[0] if do == "teach" else thing) for do, thing in actions if do != "name"]
+    commands = []
+    for do, thing in actions:
+        if do == "find" and thing:
+            commands.append(f"where is my {thing}")
+        elif do == "teach":
+            commands.append(f"learn my {thing}" if thing else "learn this")
+        elif do == "name" and thing:
+            commands.append(thing)
+        elif do in ("yes", "no", "cancel"):
+            commands.append(do)
+        elif do == "forget":
+            commands.append("forget that" if thing in ("", "that", "it") else f"forget my {thing}")
+        elif do == "rename" and thing:
+            commands.append(f"call it {thing}")
+        elif do == "list":
+            commands.append("what have you seen")
+        elif do == "chat":
+            say(meaning.get("reply") or "Sorry, I didn't catch that.")
+    if not commands and not any(do == "chat" for do, _ in actions):
+        say("Sorry, I didn't catch that.")
+    return commands
 
 
 # ------------------------------------------------------------------ drawing
@@ -734,13 +813,15 @@ def read_questions(q):
 
 
 class App:
-    def __init__(self, mem, pointer, aimer=None, detector=None):
+    def __init__(self, mem, pointer, aimer=None, detector=None, phone=None):
         from src.vision.tracker import Tracker
 
         self.mem = mem
         self.pointer = pointer
         self.aimer = aimer     # laser.Aimer: points the laser and nudges it onto the object
         self.detector = detector  # detector.BackgroundDetector, for teaching
+        self.phone = phone     # phone.Phone: alerts when you leave home without something
+        self.leaving = None    # when the phone said you left (looking for the essentials)
         # Steady objects from the jumpy passes; a taught thing is the only one of its kind.
         self.tracker = Tracker(threshold, single=lambda label: label in TAUGHT, keep=keep_level)
         self.tracks = {}       # label -> {cx, cy, box, streak, hits, seen, frame_w, frame_h}
@@ -1075,6 +1156,43 @@ class App:
         print(f"[teach] {label}: {len(entry['pictures'])} pictures, cutoff {entry['cutoff']:.2f} "
               f"(best look-alike {t.get('lookalike', 0):.2f}), photo {entry['photo']}")
 
+    # ---- leaving home
+    def left_home(self, now):
+        """The phone says you left home: look for the essentials for a few seconds."""
+        self.leaving = now
+        print(f"\n[phone] You left home. Looking for your {join_words(ESSENTIALS)}...")
+
+    def check_leaving(self, now):
+        """Called every frame. LEAVE_LOOK_SECS after you left: whatever has been seen
+        sitting still in the room since then, you forgot. Something you carried out isn't
+        in view, so it isn't mentioned."""
+        if self.leaving is None or now - self.leaving < LEAVE_LOOK_SECS:
+            return
+        since, self.leaving = self.leaving, None
+        left = [(label, obj) for label in ESSENTIALS
+                for obj in [self.mem.get(label)] if obj and obj["last_seen"] >= since]
+        if not left:
+            print("[phone] Nothing left behind.")
+            if self.phone:
+                self.phone.send("Nothing left behind", f"I don't see your {join_words(ESSENTIALS, 'or')} "
+                                "in the room.", priority=2, tags=("white_check_mark",))
+            return
+        names = join_words([label for label, _ in left])
+        lines = [f"{label.capitalize()}: {describe(obj, self.mem)}." for label, obj in left]
+        print(f"[phone] Forgot: {names}")
+        if self.phone:
+            self.phone.send(f"You forgot your {names}!", "\n".join(lines))
+        say(f"You left without your {names}.")  # for whoever is still in the room
+        self.show(*left[0], now)
+
+    def show(self, label, obj, now):
+        """Circle it in the live view and point the laser at it."""
+        self.highlight = (label, now + HIGHLIGHT_SECS)
+        if self.aimer:
+            # Close enough = within about a third of the object's size.
+            tol = max(10, 0.3 * min(obj["x2"] - obj["x1"], obj["y2"] - obj["y1"]))
+            self.aimer.start((obj["cx"], obj["cy"]), tol, (obj["frame_w"], obj["frame_h"]), now)
+
     def locate(self, label, now):
         """(where it is or was, visible right now?). A live sighting wins over memory,
         so it can answer about something you're holding before it has been remembered."""
@@ -1101,6 +1219,10 @@ class App:
             if TAUGHT:
                 print("  Taught: " + ", ".join(f"{k} ({len(v['pictures'])} pictures)" for k, v in TAUGHT.items()))
             return True
+        if c in ("what have you seen", "what do you remember"):
+            things = [r["label"] for r in self.mem.all() if r["label"] not in SURFACES]
+            say(f"I've seen your {join_words(things)}." if things else "I haven't seen anything yet.")
+            return True
         if c in ("wipe", "wipe memory", "forget everything", "clear memory"):
             self.mem.wipe()
             self.tracks.clear()
@@ -1121,6 +1243,19 @@ class App:
         if c == "save":
             self.save_view = True
             return True
+        if c in ("phone", "phone test"):
+            if not self.phone:
+                print("Phone alerts are off (PHONE in src/app.py).")
+            elif c == "phone":
+                print(self.phone.setup_steps())
+            else:
+                self.phone.send("Ctrl+F for Your Room", "Test alert: your phone is set up.", priority=3,
+                                tags=("tada",))
+                print("(test alert sent)")
+            return True
+        if c == "left home":  # what the phone sends when you leave (or type it to test)
+            self.left_home(now)
+            return True
 
         # Teaching
         phase = self.teach and self.teach["phase"]
@@ -1129,6 +1264,11 @@ class App:
                 self.detector.stop_teach()
             self.teach = None
             say("Okay, never mind.")
+            return True
+        if c in CANCEL:  # not teaching: stop pointing
+            if self.aimer:
+                self.aimer.stop()
+            self.highlight = None
             return True
         if phase in ("confirm", "learning") and (c in YES or c in NO):
             self.answer_teach(c in YES, now)
@@ -1193,13 +1333,11 @@ class App:
             say("Sorry, I don't know that one yet. I can find: " + ", ".join(OBJECTS) + ".")
             return True
         obj, visible = self.locate(label, now)
+        # Small things far away are missed for a few passes at a time: seen just now is "here".
+        visible = visible or bool(obj) and now - obj["last_seen"] <= PRESENT_SECS
         say(answer(label, obj, visible, self.mem, now))
         if obj:
-            self.highlight = (label, now + HIGHLIGHT_SECS)
-            if self.aimer:
-                # Close enough = within about a third of the object's size.
-                tol = max(10, 0.3 * min(obj["x2"] - obj["x1"], obj["y2"] - obj["y1"]))
-                self.aimer.start((obj["cx"], obj["cy"]), tol, (obj["frame_w"], obj["frame_h"]), now)
+            self.show(label, obj, now)
             if not visible and obj["snapshot"] and os.path.exists(obj["snapshot"]):
                 snap = cv2.imread(obj["snapshot"])
                 s = DISPLAY_W / 2 / snap.shape[1]
@@ -1225,6 +1363,7 @@ def save_area(area):
 
 
 def main():
+    global SPEAKER
     from src.vision.detector import BackgroundDetector, make_detector
     from src.vision.glide import Glide
 
@@ -1245,24 +1384,52 @@ def main():
               f"typically {calib.error_px:.0f} px off before correcting)")
     elif pointer.connected:
         print("(No calibration.json yet: aiming roughly. Run calibrate.py once the laser is on.)")
+    questions = queue.Queue()
+    phone = None
+    if PHONE:
+        from src.phone import Phone
+
+        phone = Phone(lambda: questions.put("left home"))
+        print(f'(Phone alerts: ntfy topic {phone.topic}. Type "phone" for the setup.)')
     app = App(Memory(), pointer, Aimer(pointer, calib or RoughMap(PAN_CENTER, PAN_SPAN,
                                                                    TILT_CENTER, TILT_SPAN)),
-              detector)
-    questions = queue.Queue()
+              detector, phone)
     threading.Thread(target=read_questions, args=(questions,), daemon=True).start()
 
+    if sys.platform == "darwin":
+        try:
+            from src.voice import Speaker
+
+            SPEAKER = Speaker(use_gemini=GEMINI)
+        except ImportError as e:
+            print(f"(speaking with the Mac's say: {e})")
+    if GEMINI:
+        from src import gemini
+
+        def check_gemini():
+            problem = gemini.check()
+            print("\n(Gemini: ready)" if problem is None else
+                  f"\n(Gemini not working: {problem}. Whisper and the Mac's voice fill in.)")
+        threading.Thread(target=check_gemini, daemon=True).start()
     voice = None
     if VOICE:
         try:
             from src.voice import Listener
 
-            def heard(text):
-                if text is None:
+            def heard(text, meaning):
+                if text:
+                    CONVERSATION.append((time.time(), f"Person: {text}"))
+                if meaning is not None:
+                    commands = voice_commands(meaning)
+                    print(f'\n(heard: "{text}" -> Gemini: {"; ".join(commands) or "-"})')
+                    for c in commands:
+                        questions.put(c)
+                elif text is None:
                     say("Sorry, I didn't catch that.")
                 else:
                     print(f'\n(heard: "{text}")')
                     questions.put(text)
-            voice = Listener(heard)
+            voice = Listener(heard, (lambda: voice_context(app)) if GEMINI else None)
         except ImportError as e:
             print(f"(voice off: {e}. pip install mlx-whisper sounddevice)")
 
@@ -1384,6 +1551,7 @@ def main():
                     cv2.imwrite(os.path.join(det_log, f"laptop{now:.2f}.jpg"), laptop_view)
 
         app.tick(frame, now)
+        app.check_leaving(now)
         app.aimer.update(frame, now)
         app.pointer.poll()
 
@@ -1414,6 +1582,8 @@ def main():
         if key == 27:
             running = False
         elif key == 32 and voice:  # SPACE = push-to-talk
+            if SPEAKER:
+                SPEAKER.stop()  # don't talk over the question
             voice.toggle()
         elif key in (ord("t"), ord("T")) and not app.teach:  # teach it something
             app.start_teach(None, None, now)

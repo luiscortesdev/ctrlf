@@ -13,3 +13,5 @@ __pycache__/
 data/
 venv/
 view_*.jpg
+# The Gemini API key (GEMINI_API_KEY=...). Never commit it.
+.env

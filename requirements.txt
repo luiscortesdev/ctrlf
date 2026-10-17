@@ -7,4 +7,6 @@ torch            # 2.14.1
 numpy            # 2.4.6
 pyserial         # 3.5      ESP32 link
 mlx-whisper      # 0.4.3    voice input (Apple Silicon only)
-sounddevice      # 0.5.6    microphone
+sounddevice      # 0.5.6    microphone and Gemini's voice
+google-genai     # 2.31.0   Gemini: understands questions, speaks answers (key in .env)
+requests         # 2.34.2   phone alerts through ntfy.sh
