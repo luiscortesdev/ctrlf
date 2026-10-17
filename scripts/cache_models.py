@@ -1,8 +1,13 @@
-"""Download the models once (OWLv2 ~620 MB, Whisper small.en ~480 MB), so the app works
-offline afterwards: python scripts/cache_models.py"""
+"""Download the models once (OWLv2 ~620 MB, Whisper ~480 MB on the Mac / ~140 MB
+elsewhere), so the app works offline afterwards: python scripts/cache_models.py"""
+
+import sys
 
 from huggingface_hub import snapshot_download
 
-for name in ("google/owlv2-base-patch16-ensemble", "mlx-community/whisper-small.en-mlx"):
+WHISPER = ("mlx-community/whisper-small.en-mlx" if sys.platform == "darwin" else
+           "Systran/faster-whisper-base.en")
+
+for name in ("google/owlv2-base-patch16-ensemble", WHISPER):
     print("caching", name)
     snapshot_download(name)

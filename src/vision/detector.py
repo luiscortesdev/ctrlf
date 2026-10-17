@@ -24,6 +24,8 @@ import cv2
 import numpy as np
 import torch
 
+from src.device import get_torch_device, half_precision
+
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # the repo
 
 # Things that get mistaken for our objects (a cross pendant scored 0.26 as "keys").
@@ -56,12 +58,6 @@ SHOW_ZONE = (0.28, 0.12, 0.72, 0.9)
 def picture_score(cos, cutoff=PICTURE_MATCH):
     """Picture similarity on the same 0-1 scale as word scores: the cutoff -> 0.5."""
     return np.clip(0.5 + 0.5 * (cos - cutoff) / (1 - cutoff), 0, 1)
-
-
-def best_device():
-    if torch.backends.mps.is_available():
-        return "mps"  # Apple GPU
-    return "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def _flatten(prompts, decoys):
@@ -140,8 +136,8 @@ class OwlDetector:
         fine when the image is already cropped to the desk."""
         from transformers import Owlv2ForObjectDetection, Owlv2Processor
 
-        self.device = device or best_device()
-        self.dtype = torch.float32 if self.device == "cpu" else torch.float16
+        self.device = torch.device(device) if device else get_torch_device()
+        self.dtype = torch.float16 if half_precision(self.device) else torch.float32
         self.size = size
         self.texts, self.owner = _flatten(prompts, decoys)
         self.examples = {}  # taught label -> (n, d) tensor of its pictures' embeddings
@@ -367,7 +363,7 @@ class YoloWorldDetector:
     def __init__(self, prompts, decoys=("person",), device=None):
         from ultralytics import YOLOWorld
 
-        self.device = device or best_device()
+        self.device = torch.device(device) if device else get_torch_device()
         self.texts, self.owner = _flatten(prompts, decoys)
         self.model = YOLOWorld(os.path.join(ROOT, "weights", "yolov8s-worldv2.pt"))
         self.model.set_classes(self.texts)

@@ -81,6 +81,23 @@ Its login is the "Camera Account" from the Tapo app (Advanced Settings), not the
 login: add `CAMERA_USER=...` and `CAMERA_PASSWORD=...` to `.env`. Turn off its timestamp
 and logo overlays in the Tapo app (the ticking clock confuses the laser's dot finder).
 `CAMERA = 1` = the iPhone through Continuity Camera (it falls back to the Mac's camera).
+
+No Wi-Fi camera? Pick another one at startup (works for `ctrlf.py`, `calibrate.py` and
+`camera_test.py`, or set `CTRLF_CAMERA` instead):
+
+```bash
+python scripts/ctrlf.py --list-cameras     # the plugged-in cameras' numbers
+python scripts/ctrlf.py --camera webcam    # WEBCAM in src/app.py (0 = usually the Mac's own)
+python scripts/ctrlf.py --camera 1         # a USB webcam is usually 1 on a Mac
+```
+
+With no `--camera`, if the Wi-Fi camera can't be reached it uses the plugged-in camera
+(`WEBCAM`) instead, so the app and the website still start; `--camera wifi` means the Wi-Fi
+camera or nothing (for the demo).
+
+A plugged-in camera sees the room differently, so it gets its own laser calibration and desk
+area (`data/calibration-webcam.json`, `data/desk_area-webcam.json`); the Wi-Fi camera's
+files are left alone. Calibrate it with `python scripts/calibrate.py --camera webcam`.
 In the video window: SPACE = ask out
 loud, T = teach something, D = only look at a desk area, Esc = quit. Typed commands:
 `where are my keys?`, `learn this`, `forget keys`, `call it ball` (rename what was just

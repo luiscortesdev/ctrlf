@@ -10,6 +10,7 @@
 # approve it the first time):
 #   source venv/bin/activate
 #   python scripts/camera_test.py        (press Esc in the video window to quit)
+#   python scripts/camera_test.py --camera webcam    (a plugged-in camera; see --help)
 
 import os
 import sys
@@ -20,19 +21,18 @@ import time
 
 import cv2
 
-from src.app import (CAMERA, DETECT_SIZE, DETECTOR, DISPLAY_W, PROMPTS, TAUGHT, TILE_SIZE, TILES,
-                   draw_desk_area, draw_tile, draw_tracks, keep_level, load_area, load_taught,
-                    threshold)
-from src.vision.camera import open_camera
+from src.app import (DETECT_SIZE, DETECTOR, DISPLAY_W, PROMPTS, TAUGHT, TILE_SIZE, TILES,
+                     camera_option, draw_desk_area, draw_tile, draw_tracks, keep_level,
+                     load_area, load_taught, open_room_camera, threshold)
 from src.vision.detector import BackgroundDetector, make_detector
 from src.vision.tracker import Tracker
 
+cap = open_room_camera(camera_option(description="Live view with boxes, for tuning thresholds."))
 print(f"Loading the {DETECTOR} detector (the first run downloads it)...")
 model = make_detector(DETECTOR, PROMPTS, DETECT_SIZE)
 load_taught(model)  # things taught in ctrlf.py; same settings as ctrlf.py
 detector = BackgroundDetector(model, keep_level, load_area(), TILES, TILE_SIZE)
 tracker = Tracker(threshold, single=lambda label: label in TAUGHT, keep=keep_level)
-cap = open_camera(CAMERA)
 
 last_print, last_seq = 0, 0
 while True:

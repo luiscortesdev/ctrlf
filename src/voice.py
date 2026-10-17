@@ -4,13 +4,15 @@ Push-to-talk voice for Ctrl+F for Your Room: listening, and talking back.
 Press SPACE in the video window, hear a "tink", ask your question. It stops by itself
 when you stop talking (or press SPACE again) and plays a "pop". The recording goes to
 Gemini (gemini.py), which hears it and works out what you want: "did you see my AirPods?",
-"and my wallet?", "nah, wrong one". Meanwhile Whisper turns it into text on the Mac's GPU
-(mlx-whisper); that's used instead if Gemini doesn't answer in time (no Wi-Fi, no key).
+"and my wallet?", "nah, wrong one". Meanwhile Whisper turns it into text: on the Mac's GPU
+(mlx-whisper), elsewhere with faster-whisper; that's used instead if Gemini doesn't answer
+in time (no Wi-Fi, no key).
 
-Speaker says the answers in Gemini's voice, or with the Mac's `say` without it.
+Speaker says the answers in Gemini's voice, or the laptop's own without it (tts.py).
 
-The first run downloads the Whisper model (~480 MB). macOS asks Terminal for microphone
-permission the first time; approve it.
+The first run downloads the Whisper model (~480 MB on the Mac, ~140 MB elsewhere; or run
+scripts/cache_models.py). The first time, macOS asks Terminal for microphone permission:
+approve it. On Windows it's Settings > Privacy & security > Microphone.
 """
 
 import hashlib
@@ -18,6 +20,7 @@ import os
 import queue
 import re
 import subprocess
+import sys
 import threading
 import time
 import wave
@@ -25,7 +28,12 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 import numpy as np
 
+from src import tts
+
 MODEL = "mlx-community/whisper-small.en-mlx"  # 0.25 s per question; base.en is faster, sloppier
+# Not on a Mac: faster-whisper, on an NVIDIA GPU if there is one, else the CPU, where
+# small.en is too slow to beat Gemini's answer, so base.en.
+WHISPER_GPU_MODEL, WHISPER_CPU_MODEL = "small.en", "base.en"
 RATE = 16000
 BLOCK = RATE // 10      # read the mic in 0.1 s blocks
 MAX_SECS = 7.0          # longest question
@@ -35,8 +43,12 @@ CUE_SECS = 0.6          # the tink plays while the mic is already on; don't mist
 # across the room 0.01-0.02. Re-check with a USB mic.
 SPEECH_LEVEL = 0.025
 TAIL_FRACTION = 0.2     # after speech, below 20% of its loudest = quiet (ignores chatter)
-START_SOUND = "/System/Library/Sounds/Tink.aiff"
-STOP_SOUND = "/System/Library/Sounds/Pop.aiff"
+# The "tink" and "pop" of the push-to-talk button.
+if sys.platform == "win32":
+    _MEDIA = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "Media")
+    START_SOUND, STOP_SOUND = os.path.join(_MEDIA, "Speech On.wav"), os.path.join(_MEDIA, "Speech Off.wav")
+else:
+    START_SOUND, STOP_SOUND = "/System/Library/Sounds/Tink.aiff", "/System/Library/Sounds/Pop.aiff"
 
 # Gemini, after you stop talking. In tests (Oct 17) answers took 0.9-1.5 s, but about 1 in 8
 # took 11-15 s: so ask again alongside after GEMINI_HEDGE, and after GEMINI_WAIT use
@@ -44,12 +56,9 @@ STOP_SOUND = "/System/Library/Sounds/Pop.aiff"
 GEMINI_WAIT = 4.5
 GEMINI_HEDGE = 1.6
 GEMINI_REST = 60
-# Speaking: Gemini's voice must start within SPEECH_WAIT (it took 0.75 s), or the Mac's
-# says it. SAY_VOICE: the Mac's voice, None = the system one. A Premium voice sounds much
-# better: download e.g. "Ava (Premium)" in System Settings > Accessibility > Spoken
-# Content > System Voice > Manage Voices, then put its name here.
+# Speaking: Gemini's voice must start within SPEECH_WAIT (it took 0.75 s), or the laptop's
+# own says it (tts.py; MAC_VOICE / WINDOWS_VOICE there pick which).
 SPEECH_WAIT = 2.5
-SAY_VOICE = None
 # Gemini's speech for answers without numbers ("Okay, never mind.") is kept here, so it
 # plays instantly next time.
 SPEECH_CACHE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data",
@@ -62,6 +71,65 @@ LOG_DIR = os.environ.get("CTRLF_VOICE_LOG")
 NOT_SPEECH = {"", "you", "thank you", "thanks for watching", "bye", "okay", "uh", "um"}
 
 POOL = ThreadPoolExecutor(max_workers=4)  # Gemini requests (a slow one is left to finish)
+
+MIC_HELP = {
+    "darwin": "System Settings > Privacy & Security > Microphone: turn on Terminal (or your "
+              "editor), then restart the app",
+    "win32": "Settings > Privacy & security > Microphone: turn on microphone access and "
+             "'Let desktop apps access your microphone'",
+}.get(sys.platform, "check that a microphone is plugged in and not used by another app")
+
+
+class MicError(Exception):
+    """The microphone can't be opened, or it sends nothing but silence."""
+
+
+def play_cue(path):
+    """Plays a short sound without waiting for it. Quietly does nothing if it can't."""
+    try:
+        if sys.platform == "darwin":
+            subprocess.Popen(["afplay", path])
+        elif sys.platform == "win32":
+            import winsound
+
+            winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
+    except (OSError, RuntimeError):
+        pass
+
+
+def whisper_setup():
+    """(model, device, compute type) for faster-whisper on this laptop."""
+    try:
+        import ctranslate2
+
+        if ctranslate2.get_cuda_device_count() > 0:
+            return WHISPER_GPU_MODEL, "cuda", "float16"
+    except Exception:
+        pass
+    return WHISPER_CPU_MODEL, "cpu", "int8"
+
+
+_whisper = None  # the faster-whisper model, once loaded
+_whisper_lock = threading.Lock()
+
+
+def transcribe(audio):
+    """Whisper's text for RATE mono float32 audio. The first call loads the model."""
+    global _whisper
+    with _whisper_lock:
+        if sys.platform == "darwin":
+            import mlx_whisper
+
+            return mlx_whisper.transcribe(audio, path_or_hf_repo=MODEL, language="en",
+                                          condition_on_previous_text=False)["text"].strip()
+        if _whisper is None:
+            from faster_whisper import WhisperModel
+
+            name, device, compute = whisper_setup()
+            _whisper = WhisperModel(name, device=device, compute_type=compute)
+        segments, _ = _whisper.transcribe(audio, language="en", beam_size=1,
+                                          condition_on_previous_text=False)
+        return "".join(s.text for s in segments).strip()
 
 
 class Endpointer:
@@ -96,23 +164,17 @@ class Listener:
         self.context = context
         self.state = "loading"
         self._stop = threading.Event()
-        self._lock = threading.Lock()
         self._misses, self._rest_until = 0, 0.0
         threading.Thread(target=self._warm_up, daemon=True).start()
 
-    def _transcribe(self, audio):
-        import mlx_whisper
-
-        with self._lock:
-            return mlx_whisper.transcribe(audio, path_or_hf_repo=MODEL, language="en",
-                                          condition_on_previous_text=False)["text"].strip()
-
     def _warm_up(self):
         try:
-            self._transcribe(np.zeros(RATE, np.float32))  # loads (and downloads) the model
+            transcribe(np.zeros(RATE, np.float32))  # loads (and downloads) the model
             self.state = "idle"
         except Exception as e:
-            print(f"\n(voice off: {e!r})")
+            need = "mlx-whisper" if sys.platform == "darwin" else "faster-whisper"
+            print(f"\n(voice off: {e!r}. pip install {need}, and run scripts/cache_models.py "
+                  "once while online)")
             self.state = "off"
 
     def toggle(self):
@@ -131,6 +193,8 @@ class Listener:
             self.state = "thinking"
             if heard:
                 text, meaning = self._understand(audio)
+        except MicError as e:
+            print(f"\n(voice: {e})")
         except Exception as e:
             print(f"\n(voice error: {e!r})")
         self.state = "idle"
@@ -153,7 +217,7 @@ class Listener:
                 asks, ask = [], None
                 print(f"\n(Gemini skipped: {e!r})")
         start = time.time()
-        text = self._transcribe(audio)  # meanwhile, in case Gemini doesn't answer
+        text = transcribe(audio)  # meanwhile, in case Gemini doesn't answer
         why, hedged = None, False
         while asks:
             now = time.time()
@@ -187,8 +251,16 @@ class Listener:
 
         blocks, ears = [], Endpointer()
         # Mic first, then the tink: people start talking the moment they press the button.
-        with sd.InputStream(samplerate=RATE, channels=1, dtype="float32", blocksize=BLOCK) as mic:
-            subprocess.Popen(["afplay", START_SOUND])
+        mic = None
+        try:
+            mic = sd.InputStream(samplerate=RATE, channels=1, dtype="float32", blocksize=BLOCK)
+            mic.start()
+        except Exception as e:  # sd.PortAudioError: no mic, in use, or no permission
+            if mic is not None:
+                mic.close()
+            raise MicError(f"can't open the microphone ({e}). {MIC_HELP}.") from e
+        with mic:
+            play_cue(START_SOUND)
             t0 = time.time()  # opening can wait on the permission prompt the first time
             why = "time limit"
             while time.time() - t0 < MAX_SECS:
@@ -199,8 +271,12 @@ class Listener:
                 if ears.add(blocks[-1]):
                     why = "silence"
                     break
-        subprocess.Popen(["afplay", STOP_SOUND])
+        play_cue(STOP_SOUND)
         audio = np.concatenate(blocks) if blocks else np.zeros(BLOCK, np.float32)
+        if len(blocks) >= 10 and not audio.any():
+            # macOS without permission gives the app a mic that records only zeros. (A mic
+            # that gates noise, like the Brio's, can be zeros for a moment, so 1 s at least.)
+            raise MicError(f"the microphone sends only silence. {MIC_HELP}.")
         if LOG_DIR:
             path = os.path.join(LOG_DIR, time.strftime("question_%H%M%S.wav"))
             with wave.open(path, "wb") as w:
@@ -214,9 +290,9 @@ class Listener:
 
 
 class Speaker:
-    """Says things one at a time, in Gemini's voice (streamed), or with the Mac's `say` if
-    there's no Gemini or it doesn't start within SPEECH_WAIT. stop() cuts it off and drops
-    what's waiting (pressing SPACE to talk does that, so it doesn't talk over you)."""
+    """Says things one at a time, in Gemini's voice (streamed), or the laptop's own (tts.py)
+    if there's no Gemini or it doesn't start within SPEECH_WAIT. stop() cuts it off and
+    drops what's waiting (pressing SPACE to talk does that, so it doesn't talk over you)."""
 
     def __init__(self, use_gemini=True):
         from src import gemini
@@ -224,7 +300,6 @@ class Speaker:
         self.use_gemini = use_gemini and gemini.client() is not None
         self.queue = queue.Queue()
         self.turn = 0  # stop() starts a new turn: lines from before it aren't said
-        self.proc = None
         threading.Thread(target=self._run, daemon=True).start()
 
     def say(self, text):
@@ -232,9 +307,7 @@ class Speaker:
 
     def stop(self):
         self.turn += 1
-        proc = self.proc
-        if proc and proc.poll() is None:
-            proc.terminate()
+        tts.stop()
 
     def _run(self):
         while True:
@@ -245,10 +318,9 @@ class Speaker:
                 if self.use_gemini and self._gemini(text, turn):
                     continue
             except Exception as e:
-                print(f"\n(Gemini voice: {e!r:.160}. Using the Mac's.)")
+                print(f"\n(Gemini voice: {e!r:.160}. Using the laptop's.)")
             if turn == self.turn:
-                self.proc = subprocess.Popen(["say"] + (["-v", SAY_VOICE] if SAY_VOICE else []) + [text])
-                self.proc.wait()
+                tts.speak(text, non_blocking=False)
 
     def _gemini(self, text, turn):
         """Says text in Gemini's voice. False if it didn't start in time."""
@@ -274,7 +346,7 @@ class Speaker:
         try:
             first = chunks.get(timeout=SPEECH_WAIT)
         except queue.Empty:
-            print(f"\n(Gemini voice: nothing after {SPEECH_WAIT} s. Using the Mac's.)")
+            print(f"\n(Gemini voice: nothing after {SPEECH_WAIT} s. Using the laptop's.)")
             return False
         if isinstance(first, Exception):
             raise first
