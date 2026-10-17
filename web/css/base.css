@@ -1,0 +1,85 @@
+/* Shared look: "laser on graphite" */
+
+@font-face { font-family: "Unbounded"; src: url("../vendor/fonts/unbounded-latin-500-normal.woff2") format("woff2"); font-weight: 500; font-display: swap; }
+@font-face { font-family: "Unbounded"; src: url("../vendor/fonts/unbounded-latin-700-normal.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+@font-face { font-family: "Instrument Sans"; src: url("../vendor/fonts/instrument-sans-latin-400-normal.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Instrument Sans"; src: url("../vendor/fonts/instrument-sans-latin-500-normal.woff2") format("woff2"); font-weight: 500; font-display: swap; }
+@font-face { font-family: "Instrument Sans"; src: url("../vendor/fonts/instrument-sans-latin-600-normal.woff2") format("woff2"); font-weight: 600; font-display: swap; }
+@font-face { font-family: "JetBrains Mono"; src: url("../vendor/fonts/jetbrains-mono-latin-400-normal.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "JetBrains Mono"; src: url("../vendor/fonts/jetbrains-mono-latin-500-normal.woff2") format("woff2"); font-weight: 500; font-display: swap; }
+
+/* Astro Space (fontspace.com): free for non-commercial use. */
+@font-face {
+  font-family: "Astro Space"; src: url("../vendor/fonts/astro-space.woff2") format("woff2");
+  font-weight: 100 900; font-display: swap;
+}
+
+:root {
+  /* Surfaces */
+  --bg: #0B0F19;          /* Obsidian Midnight (60%) */
+  --surface: #121827;
+  --surface-2: #172033;
+  --line: #1E293B;         /* Dark Slate trim */
+
+  /* Text */
+  --text: #E2E8F0;         /* Frosted Silver White (30%) */
+  --text-2: #AEB8C8;
+  --text-3: #7D889C;
+
+  /* The one accent: laser red. Only means "this is the target". */
+  --laser: #FF2E2E;        /* Laser Red (10%), the color of a real red laser dot */
+  --laser-2: #9F1239;      /* Deep Crimson, for gradients */
+  --laser-grad: linear-gradient(120deg, #E11D2E 0%, #9F1239 100%);
+  --laser-grad-text: linear-gradient(120deg, #FF5A5A 0%, #E11D2E 100%);
+  --laser-soft: rgba(255, 46, 46, 0.18);
+  --laser-text: #FF6B6B;
+
+  /* Status (paired with labels, never color alone) */
+  --seen: #7fd6a8;
+  --hidden: #f0b45a;
+  --hidden-bg: rgba(240, 180, 90, 0.12);
+
+  --font-display: "Astro Space", "Unbounded", system-ui, sans-serif;
+  --font-ui: "Astro Space", "Instrument Sans", system-ui, sans-serif;
+  --font-mono: "Astro Space", "JetBrains Mono", ui-monospace, monospace;
+
+  --radius: 14px;
+  --ease-snap: cubic-bezier(0.2, 0.9, 0.1, 1);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  /* Keep letters separate (no ligatures). */
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "clig" 0, "dlig" 0, "calt" 0;
+}
+
+[hidden] { display: none !important; }
+
+button, input, select { font: inherit; color: inherit; font-feature-settings: inherit; }
+
+button { cursor: pointer; }
+
+:focus-visible { outline: 2px solid var(--laser-text); outline-offset: 2px; }
+
+.mono { font-family: var(--font-mono); }
+
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap;
+}
+
+.icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 44px; min-height: 44px; padding: 0 14px; gap: 8px;
+  border-radius: 999px; border: 1px solid var(--line);
+  background: transparent; color: var(--text-2); font-size: 14px;
+  transition: border-color 0.2s, color 0.2s;
+}
+.icon-btn:hover { border-color: var(--text-3); color: var(--text); }

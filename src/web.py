@@ -1,0 +1,278 @@
+"""
+The website's link to the running app (see web/ and web/API.md).
+
+Serves the web/ folder and a small API on http://localhost:8000 from a background
+thread, using only the standard library (no extra installs):
+
+    GET  /                 the intro, then the dashboard
+    GET  /api/state        what the dashboard shows (JSON, polled a few times a second)
+    POST /api/command      {"text": "where are my keys?"}: same as typing it in Terminal
+    POST /api/listen       push-to-talk, same as SPACE in the video window
+    POST /api/click        {"x": 0-1, "y": 0-1}: while teaching, "it's this one"
+    GET  /video            live room view with boxes (MJPEG)
+    GET  /video/teach      the laptop camera while teaching (MJPEG)
+    GET  /snapshots/<f>    last-seen snapshots;  GET /taught/<f>  taught things' photos
+
+The app's objects (memory's SQLite connection, the tracker) belong to the main loop, so
+the main loop calls tick() and everything the server sends is built there, never in the
+server's threads.
+"""
+
+import json
+import os
+import threading
+import time
+from collections import deque
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import unquote, urlparse
+
+import cv2
+
+PORT = int(os.environ.get("CTRLF_WEB_PORT", "8000"))
+STATE_EVERY = 0.2   # seconds between state updates
+VIDEO_EVERY = 1 / 15  # live view frames per second sent to the browser
+JPEG_QUALITY = 75
+
+TYPES = {  # set explicitly: Windows' registry can map .js to text/plain
+    ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8", ".json": "application/json",
+    ".md": "text/markdown; charset=utf-8", ".txt": "text/plain; charset=utf-8",
+    ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf", ".otf": "font/otf",
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+}
+
+
+class Stream:
+    """Latest JPEG of one video feed, handed to every connected browser."""
+
+    def __init__(self):
+        self.jpeg = None
+        self.viewers = 0
+        self.cond = threading.Condition()
+        self.sent_at = 0.0
+
+    def put(self, img, now):
+        if self.viewers == 0 or now - self.sent_at < VIDEO_EVERY:
+            return
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
+        if ok:
+            with self.cond:
+                self.jpeg = buf.tobytes()
+                self.sent_at = now
+                self.cond.notify_all()
+
+
+class WebBridge:
+    def __init__(self, root, snap_dir, taught_dir):
+        self.web_dir = os.path.join(root, "web")
+        self.snap_dir = snap_dir
+        self.taught_dir = taught_dir
+        self.room = Stream()
+        self.teach_feed = Stream()
+        self.actions = deque()      # from the browser, run by the main loop
+        self.state_json = b"{}"
+        self.state_at = 0.0
+        self.heard = None           # (time, text) of the last question or command
+        self.server = None
+
+    # ---- server
+    def start(self):
+        bridge = self
+
+        class Handler(_Handler):
+            pass
+        Handler.bridge = bridge
+        try:
+            self.server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+        except OSError as e:
+            print(f"(website off: port {PORT} is busy ({e}). Stop the other server, "
+                  f"or set CTRLF_WEB_PORT to another port.)")
+            return False
+        self.server.daemon_threads = True
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        print(f"Website: http://localhost:{PORT}  (dashboard: /dashboard.html)")
+        return True
+
+    # ---- called by the main loop
+    def take_actions(self):
+        while self.actions:
+            yield self.actions.popleft()
+
+    def note_command(self, text, now):
+        self.heard = (now, text)
+
+    def tick(self, app, room_view, teach_view, voice, detector, said, now, helpers):
+        self.room.put(room_view, now)
+        if teach_view is not None:
+            self.teach_feed.put(teach_view, now)
+        if now - self.state_at >= STATE_EVERY:
+            self.state_at = now
+            self.state_json = json.dumps(
+                self._state(app, voice, detector, said, now, helpers, teach_view is not None)).encode()
+
+    # ---- the dashboard's view of the app
+    def _state(self, app, voice, detector, said, now, h, teach_live):
+        items = []
+        for r in app.mem.all():
+            if r["label"] in h["surfaces"]:
+                continue
+            obj, visible = app.locate(r["label"], now)
+            obj = obj or r
+            items.append({
+                "name": r["label"],
+                "visible": bool(visible),
+                "last_seen": _iso(obj["last_seen"]),
+                "where": h["describe"](obj, app.mem),
+                "snapshot": f"/snapshots/{os.path.basename(r['snapshot'])}" if r.get("snapshot") else None,
+                "bbox": _norm(obj),
+            })
+
+        highlight = app.highlight if app.highlight and now < app.highlight[1] else None
+        aim_state = app.aimer.state if app.aimer else "idle"
+        last_said = said[-1] if said else None
+        status = {"state": "IDLE", "target": None, "result": None, "message": None}
+        target = None
+        if app.teach:
+            status.update(state="TEACHING", target=app.teach.get("name"),
+                          message=last_said[1] if last_said else None)
+        elif highlight:
+            label = highlight[0]
+            obj, visible = app.locate(label, now)
+            target = {"name": label, "bbox": _norm(obj)} if obj and visible else None
+            message = last_said[1] if last_said else None
+            if aim_state in ("off", "on"):
+                status.update(state="TRACKING", target=label, message=message)
+            else:
+                status.update(state="REPORTING", target=label, message=message,
+                              result="found" if visible else "hidden")
+        elif self.heard and now - self.heard[0] < 6 and last_said and last_said[0] >= self.heard[0]:
+            status.update(state="REPORTING", result="info", message=last_said[1])
+        elif self.heard and now - self.heard[0] < 2:
+            status.update(state="QUERYING", message=self.heard[1])
+
+        teach = None
+        if app.teach:
+            teach = {"phase": app.teach.get("phase"), "name": app.teach.get("name"),
+                     "laptop_feed": teach_live}
+        return {
+            "now": _iso(now),
+            "items": items,
+            "can_find": sorted(k for k in h["objects"] if k not in h["surfaces"]),
+            "taught": sorted(h["taught"]),
+            "status": status,
+            "target": target,
+            "aim": aim_state,
+            "teach": teach,
+            "voice": getattr(voice, "state", "off") if voice else "off",
+            "heard": {"time": _iso(self.heard[0]), "text": self.heard[1]} if self.heard else None,
+            "said": [{"time": _iso(t), "text": s} for t, s in list(said)[-12:]],
+            "detector_fps": round(1 / detector.secs_per_frame, 1) if getattr(detector, "secs_per_frame", 0) else None,
+            "laser_connected": bool(getattr(app.pointer, "connected", False)),
+        }
+
+
+def _iso(t):
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(t))
+
+
+def _norm(obj):
+    if not obj:
+        return None
+    w, h = obj["frame_w"] or 1, obj["frame_h"] or 1
+    return [round(obj["x1"] / w, 4), round(obj["y1"] / h, 4), round(obj["x2"] / w, 4), round(obj["y2"] / h, 4)]
+
+
+class _Handler(BaseHTTPRequestHandler):
+    bridge = None  # set in WebBridge.start
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *args):
+        pass  # quiet: the Terminal is for the app
+
+    def _send(self, code, body, ctype="application/json", cache=False):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        # No caching: every reload gets the latest files while we're still editing them.
+        self.send_header("Cache-Control", "max-age=3600" if cache else "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        path = unquote(urlparse(self.path).path)
+        b = self.bridge
+        if path == "/api/state":
+            return self._send(200, b.state_json)
+        if path == "/video":
+            return self._stream(b.room)
+        if path == "/video/teach":
+            return self._stream(b.teach_feed)
+        if path.startswith("/snapshots/"):
+            return self._file(b.snap_dir, path[len("/snapshots/"):], cache=True)
+        if path.startswith("/taught/"):
+            return self._file(b.taught_dir, path[len("/taught/"):])
+        if path == "/":
+            path = "/index.html"
+        return self._file(b.web_dir, path.lstrip("/"))
+
+    def do_POST(self):
+        path = urlparse(self.path).path
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            data = json.loads(self.rfile.read(n) or b"{}")
+        except ValueError:
+            return self._send(400, b'{"ok": false, "error": "bad json"}')
+        if path == "/api/command":
+            text = str(data.get("text", "")).strip()[:200]
+            if not text:
+                return self._send(400, b'{"ok": false, "error": "empty"}')
+            self.bridge.actions.append(("command", text))
+            return self._send(200, b'{"ok": true}')
+        if path == "/api/click":  # while teaching: "it's this one" (x, y as 0-1 of the view)
+            try:
+                point = (min(1.0, max(0.0, float(data["x"]))), min(1.0, max(0.0, float(data["y"]))))
+            except (KeyError, TypeError, ValueError):
+                return self._send(400, b'{"ok": false}')
+            self.bridge.actions.append(("click", point))
+            return self._send(200, b'{"ok": true}')
+        if path == "/api/listen":
+            self.bridge.actions.append(("listen", None))
+            return self._send(200, b'{"ok": true}')
+        return self._send(404, b'{"ok": false}')
+
+    def _file(self, folder, rel, cache=False):
+        full = os.path.realpath(os.path.join(folder, rel))
+        if not full.startswith(os.path.realpath(folder) + os.sep) or not os.path.isfile(full):
+            return self._send(404, b"not found", "text/plain")
+        with open(full, "rb") as f:
+            body = f.read()
+        ext = os.path.splitext(full)[1].lower()
+        return self._send(200, body, TYPES.get(ext, "application/octet-stream"), cache)
+
+    def _stream(self, stream):
+        self.send_response(200)
+        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        with stream.cond:
+            stream.viewers += 1
+        try:
+            last = None
+            while True:
+                with stream.cond:
+                    stream.cond.wait_for(lambda: stream.jpeg is not last, timeout=5)
+                    jpeg = stream.jpeg
+                if jpeg is None or jpeg is last:
+                    continue
+                last = jpeg
+                self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                                 + str(len(jpeg)).encode() + b"\r\n\r\n" + jpeg + b"\r\n")
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+            pass
+        finally:
+            with stream.cond:
+                stream.viewers -= 1
