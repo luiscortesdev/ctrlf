@@ -75,8 +75,13 @@ dashboard (live view, ask box, last seen, tracking, teaching). It's the `web/` f
 served by `src/web.py` from the same Python process, so there's nothing else to run.
 Use `CTRLF_WEB_PORT=8001` if port 8000 is busy. See `web/README.md` and `web/API.md`.
 
-Camera: the iPhone through Continuity Camera is the default (`CAMERA = 1` in
-`src/app.py`); it falls back to the Mac's camera. In the video window: SPACE = ask out
+Camera: a Tapo TCW61 Wi-Fi camera on the iPhone hotspot is the default (`CAMERA` in
+`src/app.py` is its RTSP address; if the hotspot gives it a new address, the app finds it).
+Its login is the "Camera Account" from the Tapo app (Advanced Settings), not the Tapo
+login: add `CAMERA_USER=...` and `CAMERA_PASSWORD=...` to `.env`. Turn off its timestamp
+and logo overlays in the Tapo app (the ticking clock confuses the laser's dot finder).
+`CAMERA = 1` = the iPhone through Continuity Camera (it falls back to the Mac's camera).
+In the video window: SPACE = ask out
 loud, T = teach something, D = only look at a desk area, Esc = quit. Typed commands:
 `where are my keys?`, `learn this`, `forget keys`, `call it ball` (rename what was just
 taught), `list`, `wipe`, `servo 90 120`, `laser on` / `laser off`, `save`, `phone` (alert
