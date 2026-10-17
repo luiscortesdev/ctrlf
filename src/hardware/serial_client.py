@@ -17,6 +17,36 @@ import time
 POINTER_PORT, BEACON_PORT = 3333, 3334  # keep in sync with the firmware
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # the repo
 SECRETS_PATH = os.path.join(ROOT, "firmware", "esp32_controller", "src", "secrets.h")
+# USB-to-serial chips on ESP32 boards, by USB vendor id: Silicon Labs CP210x, WCH CH340 /
+# CH343 / CH9102, FTDI, and the ESP32-S3's own USB port (Espressif).
+ESPRESSIF_VID = 0x303A
+USB_SERIAL_VIDS = {0x10C4, 0x1A86, 0x0403, ESPRESSIF_VID}
+
+
+def _natural(name):
+    """Sort key so COM10 comes after COM9."""
+    return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", name)]
+
+
+def usb_ports(port=None):
+    """The serial ports the ESP32 could be on, likeliest first, as (device, USB vendor id
+    or None). port, or CTRLF_PORT in the environment (e.g. COM5), picks one instead."""
+    port = port or os.environ.get("CTRLF_PORT")
+    if port:
+        return [(port, None)]
+    found = [(p, None) for p in sorted(glob.glob("/dev/cu.usbmodem*") + glob.glob("/dev/cu.usbserial*")
+                                       + glob.glob("/dev/cu.wchusbserial*"))]  # a Mac
+    try:
+        from serial.tools import list_ports
+    except ImportError:
+        return found
+    seen = {device for device, _ in found}
+    more = [(p.device, p.vid) for p in list_ports.comports()  # Windows (COM5), Linux, a Mac
+            if p.vid in USB_SERIAL_VIDS and p.device not in seen
+            and not p.device.startswith("/dev/tty.")]  # (a Mac's twin of a /dev/cu. port)
+    # The S3's own USB port last: the firmware talks on the one labeled COM.
+    more.sort(key=lambda d: (d[1] == ESPRESSIF_VID, _natural(d[0])))
+    return found + more
 
 
 def wifi_key(path=SECRETS_PATH):
@@ -95,7 +125,8 @@ class NetLink:
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
                 udp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                udp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                if hasattr(socket, "SO_REUSEPORT"):  # not on Windows
+                    udp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
                 udp.bind(("", BEACON_PORT))
                 end = time.time() + 3
                 while time.time() < end:
@@ -183,11 +214,12 @@ class NetLink:
 
 class Pointer:
     """Talks to the ESP32. link: "usb", "wifi", or "auto" = USB when it's plugged into the
-    Mac, else Wi-Fi. host: its Wi-Fi address, or None to find it. Optional: everything else
-    works without it."""
+    laptop, else Wi-Fi. host: its Wi-Fi address, or None to find it. port: its serial port
+    (e.g. "COM5"), or None to find it (see usb_ports). Optional: everything else works
+    without it."""
 
-    def __init__(self, link="auto", host=None, secrets=SECRETS_PATH):
-        self.link, self.host, self.secrets = link, host, secrets
+    def __init__(self, link="auto", host=None, secrets=SECRETS_PATH, port=None):
+        self.link, self.host, self.secrets, self.port = link, host, secrets, port
         self.ser = None  # the serial port, or a NetLink (same calls)
         self.pan, self.tilt = 90, 125  # last commanded position (the firmware reports it)
         self.warned = False
@@ -222,35 +254,49 @@ class Pointer:
         except ImportError:
             print("(pyserial not installed: no USB link to the ESP32)")
             return
-        ports = sorted(glob.glob("/dev/cu.usbmodem*") + glob.glob("/dev/cu.usbserial*")
-                       + glob.glob("/dev/cu.wchusbserial*"))
+        ports = usb_ports(self.port)
         if not ports:
             if self.link == "usb":
                 print("(No ESP32 plugged in: laser control off. That's fine for now.)")
             return
-        try:
-            self.ser = serial.Serial(ports[0], 115200, timeout=0)
-        except Exception as e:
-            print(f"(Couldn't open {ports[0]}: {e})")
-            return
-        # Opening the port can reboot the ESP32 (it wiggles the servos for ~2 s first),
-        # so keep asking for its position until it answers.
-        reply, t0, asked = "", time.time(), 0
-        while time.time() - t0 < 4 and "OK P" not in reply:
-            if time.time() - asked > 0.5:
-                self.ser.write(b"?\n")
-                asked = time.time()
-            time.sleep(0.05)
-            reply += self.ser.read(self.ser.in_waiting or 1).decode(errors="ignore")
-        if "OK P" in reply:
-            self._hello(reply)
-            print(f"(Pointer connected over USB: {ports[0]})")
-        else:  # some other sketch: don't send it anything
-            print(f"(Something is on {ports[0]} but it doesn't answer like esp32_controller. "
-                  f"Is the firmware uploaded? " + ("Trying Wi-Fi.)" if self.link == "auto"
-                                                   else "Laser control off.)"))
-            self.ser.close()
-            self.ser = None
+        for port, vid in ports:
+            ser = serial.Serial()  # (opened below, once the reset lines are set)
+            ser.port, ser.baudrate, ser.timeout = port, 115200, 0
+            # Opening a port normally raises DTR and RTS, which on an ESP32 board's
+            # auto-reset circuit can reboot it, or on Windows hold it in reset. Keep them low.
+            ser.dtr = ser.rts = False
+            try:
+                ser.open()
+            except Exception as e:
+                busy = "denied" in str(e).lower() or "busy" in str(e).lower()
+                print(f"(Couldn't open {port}: {e}" + (". Close whatever else has it: the Serial "
+                      "Monitor, pio device monitor, or another ctrlf.py/calibrate.py.)" if busy else ")"))
+                continue
+            # If it does reboot (it wiggles the servos for ~2.5 s first), keep asking for its
+            # position until it answers.
+            reply, t0, asked = "", time.time(), 0
+            while time.time() - t0 < 4 and "OK P" not in reply:
+                if time.time() - asked > 0.5:
+                    ser.write(b"?\n")
+                    asked = time.time()
+                time.sleep(0.05)
+                reply += ser.read(ser.in_waiting or 1).decode(errors="ignore")
+            if "OK P" in reply:
+                self.ser = ser
+                self._hello(reply)
+                print(f"(Pointer connected over USB: {port})")
+                return
+            ser.close()  # some other sketch, or the wrong port: don't send it anything
+            if vid == ESPRESSIF_VID:
+                print(f"({port} is the ESP32-S3's own USB port, which the firmware doesn't talk "
+                      "on: plug the cable into the board's other USB port, labeled COM or UART.)")
+            else:
+                print(f"(Something is on {port} but it doesn't answer like esp32_controller. "
+                      "Is the firmware uploaded?)")
+        if self.link == "auto":
+            print("(Trying Wi-Fi.)")
+        else:
+            print("(Laser control off.)")
 
     def _open_wifi(self):
         wifi = wifi_key(self.secrets)

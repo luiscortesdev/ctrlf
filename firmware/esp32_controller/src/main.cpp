@@ -559,7 +559,7 @@ void setup() {
   rmtInit(RING_PIN, RMT_TX_MODE, RMT_MEM_NUM_BLOCKS_2, 10000000);  // 10 MHz: 0.1 us steps
   ringShow = 'H';
   ringSince = millis();
-  Serial.println("Ctrl+F pointer ready. Try: P60   P120   T50   L1   L0   C   ?   RX");
+  Serial.println("Ctrl+F pointer ready. Try: P60   P120   T140   L1   L0   C   ?   RX");
   startWifi();
 }
 

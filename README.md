@@ -46,6 +46,8 @@ drives the servos and the laser.
 | `scripts/calibrate.py` | Laser calibration sweep (writes `data/calibration.json`) |
 | `scripts/measure_lag.py` | Times how far the Wi-Fi camera runs behind, with the LED ring (for `CAMERA_LAG_SECS`) |
 | `scripts/preflight.py` | Checks the network, camera, ESP32, Gemini, models, audio and calibration before a demo |
+| `scripts/test_servos.py` | First test of the pan/tilt head and laser over USB, no camera; `--jog` to move it by hand |
+| `src/vision/visual_servoing.py` | Calibration-free proportional aiming (not used by the app yet); tested in `tests/sim/` |
 | `firmware/esp32_controller/` | ESP32-S3 firmware: smooth servo glides, anti-backlash, laser auto-off, Wi-Fi, LED ring |
 | `data/` | What it remembers and learns. Not in git: it's photos of your room |
 
@@ -125,6 +127,25 @@ laser turns off if the app goes quiet.
 
 Build and upload with PlatformIO (`pio run -t upload`, see `platformio.ini`) or the
 Arduino IDE (ESP32 core 3.x, board "ESP32S3 Dev Module", Flash Size 16MB, PSRAM OPI).
+
+### First test on Windows
+
+1. Plug the board's **COM** (UART) USB port into the laptop with a data cable. Device
+   Manager > Ports (COM & LPT) should list it, e.g. "USB-SERIAL CH340 (COM3)" or "Silicon
+   Labs CP210x (COM5)". Nothing there, or a yellow "!": install that chip's driver (WCH
+   CH343/CH340 or Silicon Labs CP210x). The board's other port ("USB") shows up as "USB
+   JTAG/serial debug unit": it can upload, but the firmware doesn't talk on it.
+2. Upload the firmware from **PowerShell** in the repo (or the VS Code PlatformIO
+   extension's Upload button). Not Git Bash: ESP-IDF's tool installer refuses to run under
+   MSYS ("MSys/Mingw is not supported") and the compiler never gets installed. The first
+   build downloads ~1 GB:
+   `& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -e esp32s3 -t upload`.
+   If it can't connect, hold BOOT, tap RESET, let go of BOOT, and upload again.
+3. Servos on their own 5 V supply (grounds joined), then
+   `venv/Scripts/python scripts/test_servos.py`: it sweeps pan and tilt, checks the board
+   refuses to tilt above `TILT_MIN`, and blinks the laser at the desk. `--jog` moves it by
+   hand. It finds the port itself; `--port COM5` (or `CTRLF_PORT=COM5` for every script)
+   picks one. Close the Serial Monitor first: only one program can have the port.
 Commands at 115200 baud or over Wi-Fi: `P<deg> T<deg> L0/L1` (tenths allowed), `C`, `?`;
 replies `OK P92.5 T125.0 L0 R1`. LED ring: `RW` watching, `RL` listening, `RT` thinking,
 `RF<deg>` found, `RS<deg>` last seen, `RN` not seen, `RX` test (see main.cpp). Higher tilt
