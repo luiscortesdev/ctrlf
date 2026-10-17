@@ -47,7 +47,6 @@ drives the servos and the laser.
 | `scripts/measure_lag.py` | Times how far the Wi-Fi camera runs behind, with the LED ring (for `CAMERA_LAG_SECS`) |
 | `scripts/preflight.py` | Checks the network, camera, ESP32, Gemini, models, audio and calibration before a demo |
 | `scripts/test_servos.py` | First test of the pan/tilt head and laser over USB, no camera; `--jog` to move it by hand |
-| `src/vision/visual_servoing.py` | Calibration-free proportional aiming (not used by the app yet); tested in `tests/sim/` |
 | `firmware/esp32_controller/` | ESP32-S3 firmware: smooth servo glides, anti-backlash, laser auto-off, Wi-Fi, LED ring |
 | `data/` | What it remembers and learns. Not in git: it's photos of your room |
 
