@@ -3,3 +3,9 @@
 # Ignore all PyTorch model weights
 *.pt
 *.pth
+
+# PlatformIO and pytest caches
+.pio/
+.pytest_cache/
+__pycache__/
+*.pyc
