@@ -832,12 +832,18 @@ class App:
         self.teach = None      # while learning something: {"name", "phase", ...}
         self.spots = {}        # taught label -> where it's sitting: {"center", "still", "best"}
         self.last_taught = None  # the label taught last ("forget that", "call it ...")
+        self.last_pass = None  # when the latest detector pass started
+        self.pass_secs = 0.0   # seconds between passes (~0.4 on the Mac, 3+ on a laptop CPU)
 
     def update(self, candidates, frame, now, views=(), look=None):
         """candidates: [(label, confidence, (x1, y1, x2, y2))] from one finished detector pass.
         views: [(label, box, embedding, similarity)] for taught things in it. look: that
         pass's detector.Look of the whole view (to see hands)."""
         h, w = frame.shape[:2]
+        if self.last_pass is not None and now > self.last_pass:
+            gap = now - self.last_pass
+            self.pass_secs = gap if not self.pass_secs else 0.8 * self.pass_secs + 0.2 * gap
+        self.last_pass = now
         self.tracker.update(candidates, now)
         if views and not self.teach:
             self.learn_spots(views, w, now, look)
@@ -861,20 +867,43 @@ class App:
                     verb = "Remembered" if change == "new" else "Moved"
                     print(f"\n[memory] {verb}: {label}, {place_words(cx, cy, w, h)}")
         for label in list(self.tracks):
-            if now - self.tracks[label]["seen"] > VISIBLE_SECS:
+            if now - self.tracks[label]["seen"] > self.visible_secs():
                 del self.tracks[label]
 
+    def visible_secs(self):
+        """How long since it was seen still counts as in view: VISIBLE_SECS, or as long as
+        the tracker keeps boxing something it missed, if the detector is slower than that."""
+        from src.vision.tracker import MISS_PASSES
+
+        return max(VISIBLE_SECS, MISS_PASSES * self.pass_secs)
+
+    def in_view(self, seen, now):
+        """Was something last seen at `seen` (a pass's start time) in view right now? Counted
+        on the detector's clock: a pass's result only arrives a pass after it started, so on
+        a slow detector everything would already look stale by wall-clock time. The second
+        check notices a detector that has stopped."""
+        latest = self.last_pass if self.last_pass is not None else now
+        return latest - seen <= self.visible_secs() and now - latest <= self.visible_secs() + self.pass_secs
+
     def focus_spots(self, frame_size, now):
-        """Where to look again: the last spots of remembered small things that are out of
-        sight right now, most recently seen first. Empty when everything is in view."""
+        """Where to look again. First, small things seen once in the last pass but not
+        confirmed yet: found in a zoomed tile, they'd wait for that tile to come around
+        again (every 4th pass) for the second sighting; this zooms in on the very next
+        pass. Otherwise the last spots of remembered small things that are out of sight
+        right now, most recently seen first. Empty when everything is in view."""
         from src.vision.detector import zoom_region
 
         w, h = frame_size
-        rows = [r for r in self.mem.all() if r["label"] not in SURFACES
-                and (r["x2"] - r["x1"]) * (r["y2"] - r["y1"]) < 0.05 * w * h
-                and not self.locate(r["label"], now)[1]]
+        small = lambda x1, y1, x2, y2: (x2 - x1) * (y2 - y1) < 0.05 * w * h
         cols, nrows = TILES or (2, 2)
         zw, zh = int(min(w, 1.15 * w / cols)), int(min(h, 1.15 * h / nrows))  # a tile's size
+        new = [t.box for t in self.tracker.tracks
+               if t.fresh and not t.confirmed and t.label not in SURFACES and small(*t.box)]
+        if new:
+            return [zoom_region(box, (w, h), (zw, zh)) for box in new[:FOCUS_SPOTS]]
+        rows = [r for r in self.mem.all() if r["label"] not in SURFACES
+                and small(r["x1"], r["y1"], r["x2"], r["y2"])
+                and not self.locate(r["label"], now)[1]]
         spots = []
         for r in rows[:FOCUS_SPOTS]:
             sx, sy = w / r["frame_w"], h / r["frame_h"]
@@ -1214,15 +1243,16 @@ class App:
 
     def locate(self, label, now):
         """(where it is or was, visible right now?). A live sighting wins over memory,
-        so it can answer about something you're holding before it has been remembered."""
+        so it can answer about something you're holding before it has been remembered.
+        The tracker has already confirmed it (two sightings), so in view = boxed in the video."""
         t = self.tracks.get(label)
-        if t and t["hits"] >= 2 and now - t["seen"] <= VISIBLE_SECS:
+        if t and self.in_view(t["seen"], now):
             x1, y1, x2, y2 = t["box"]
             return {"label": label, "x1": x1, "y1": y1, "x2": x2, "y2": y2,
                     "frame_w": t["frame_w"], "frame_h": t["frame_h"], "cx": t["cx"], "cy": t["cy"],
                     "last_seen": t["seen"], "moved_at": t["seen"], "snapshot": None}, True
         obj = self.mem.get(label)
-        return obj, bool(obj) and now - obj["last_seen"] <= VISIBLE_SECS
+        return obj, bool(obj) and self.in_view(obj["last_seen"], now)
 
     def command(self, text, now):
         """Handle one typed line. Returns False to quit."""

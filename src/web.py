@@ -5,7 +5,8 @@ Serves the web/ folder and a small API on http://localhost:8000 from a backgroun
 thread, using only the standard library (no extra installs):
 
     GET  /                 the intro, then the dashboard
-    GET  /api/state        what the dashboard shows (JSON, polled a few times a second)
+    GET  /api/state        what the dashboard shows (JSON)
+    GET  /api/events       the same, pushed each time it changes (server-sent events)
     POST /api/command      {"text": "where are my keys?"}: same as typing it in Terminal
     POST /api/listen       push-to-talk, same as SPACE in the video window
     POST /api/click        {"x": 0-1, "y": 0-1}: while teaching, "it's this one"
@@ -85,7 +86,10 @@ class WebBridge:
         self.actions = deque()      # from the browser, run by the main loop
         self.state = None           # the latest _state(), replaced (never changed) by tick()
         self.state_json = b"{}"
+        self.state_version = 0      # +1 each time the state changes (for /api/events)
+        self.state_cond = threading.Condition()
         self.state_at = 0.0
+        self.state_key = None       # what rebuilds the state at once when it changes
         self.heard = None           # (time, text) of the last question or command
         self.server = None
         self.port = None
@@ -128,21 +132,40 @@ class WebBridge:
         self.room.put(room_view, now)
         if teach_view is not None:
             self.teach_feed.put(teach_view, now)
-        if now - self.state_at >= STATE_EVERY:
-            self.state_at = now
-            # The handlers read self.state from their own threads, so it's swapped for a new
-            # dict, never changed in place.
-            state = self._state(app, voice, detector, said, now, helpers, teach_view is not None)
-            self.state_json = json.dumps(state).encode()
-            self.state = state
+        # Rebuilt right away when a detector pass lands or it says or hears something, so
+        # the browser isn't a STATE_EVERY behind; otherwise every STATE_EVERY (things age).
+        key = (detector.result()[0] if detector else None, said[-1] if said else None, self.heard,
+               app.aimer.state if app.aimer else None, getattr(voice, "state", None),
+               app.teach and app.teach.get("phase"), app.highlight)
+        if key == self.state_key and now - self.state_at < STATE_EVERY:
+            return
+        self.state_key, self.state_at = key, now
+        state = self._state(app, voice, detector, said, now, helpers, teach_view is not None)
+        body = json.dumps(state).encode()
+        if body == self.state_json:
+            return
+        # The handlers read these from their own threads, so the state is swapped for a new
+        # dict, never changed in place.
+        with self.state_cond:
+            self.state, self.state_json = state, body
+            self.state_version += 1
+            self.state_cond.notify_all()
 
     # ---- the dashboard's view of the app
     def _state(self, app, voice, detector, said, now, h, teach_live):
+        # What it remembers, and what's boxed in the video right now but not remembered yet
+        # (that waits until it has sat still for a few passes, and a thing being carried
+        # never does), so things show up here as soon as they do in the video.
+        rows = app.mem.all()
+        remembered = {r["label"] for r in rows}
+        rows += [{"label": label, "snapshot": None} for label in app.tracks if label not in remembered]
         items = []
-        for r in app.mem.all():
+        for r in rows:
             if r["label"] in h["surfaces"]:
                 continue
             obj, visible = app.locate(r["label"], now)
+            if r["label"] not in remembered and not visible:
+                continue
             obj = obj or r
             items.append({
                 "name": r["label"],
@@ -235,6 +258,8 @@ class _Handler(BaseHTTPRequestHandler):
         b = self.bridge
         if path == "/api/state":
             return self._send(200, b.state_json)
+        if path == "/api/events":
+            return self._events(b)
         if path in ("/video", "/api/video_feed"):
             return self._stream(b.room)
         if path.startswith("/api/"):
@@ -341,6 +366,32 @@ class _Handler(BaseHTTPRequestHandler):
             body = f.read()
         ext = os.path.splitext(full)[1].lower()
         return self._send(200, body, TYPES.get(ext, "application/octet-stream"), cache)
+
+    def _events(self, b):
+        """Server-sent events: the /api/state JSON each time it changes, the moment it does
+        (no polling delay). A comment every few seconds when nothing changes, to notice a
+        browser that's gone."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        version = 0  # nothing until the first state
+        try:
+            self.wfile.write(b"retry: 1000\n\n")  # reconnect a second after the app restarts
+            while True:
+                with b.state_cond:
+                    b.state_cond.wait_for(lambda: b.state_version != version, timeout=5)
+                    new, body = b.state_version, b.state_json
+                if new == version:
+                    self.wfile.write(b": keep-alive\n\n")
+                else:
+                    version = new
+                    self.wfile.write(b"data: " + body + b"\n\n")
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+            pass
 
     def _stream(self, stream):
         self.send_response(200)

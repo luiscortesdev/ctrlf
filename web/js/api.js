@@ -1,6 +1,6 @@
 // The ONLY file that talks to the backend.
-// Live mode talks to the Python app (src/web.py in the repo): it polls
-// /api/state and sends commands to /api/command, just like typing in Terminal.
+// Live mode talks to the Python app (src/web.py in the repo): it gets the app's
+// state from /api/events and sends commands to /api/command, just like typing in Terminal.
 // If the app isn't running, it falls back to mock mode so the dashboard still
 // works for design and demos (add ?mock to the URL to force it).
 
@@ -86,8 +86,20 @@ export async function teach(name, images) {
 
 const live = { items: {}, tracked: [], status: "", target: "", said: 0, heard: "", teach: "", voice: "", known: "", failures: 0 };
 
+// The app pushes its state the moment it changes (/api/events), so a new object shows
+// up here as soon as the app sees it; polling /api/state is only the fallback.
 function startLive() {
-  poll();
+  if (!window.EventSource) return poll();
+  const events = new EventSource("/api/events");
+  events.onmessage = (e) => {
+    if (live.failures) emit("connection", "live");
+    live.failures = 0;
+    applyState(JSON.parse(e.data));
+  };
+  events.onerror = () => {  // it reconnects by itself
+    live.failures += 1;
+    if (live.failures === 2) emit("connection", "reconnecting");
+  };
 }
 
 async function poll() {
