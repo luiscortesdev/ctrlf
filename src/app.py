@@ -9,8 +9,9 @@ What it does
     ("Your keys are in the back left, just left of the laptop.") and circles
     them on screen. If they're out of sight, it says when and where it last saw
     them and shows that snapshot.
-  - If the ESP32 pointer is plugged in, it swings the laser toward the object and
-    nudges it on by watching the dot (laser.py; rough aim until calibrate.py has run).
+  - If the ESP32 pointer is connected (USB, or Wi-Fi: see POINTER_LINK), it swings the
+    laser toward the object and nudges it on by watching the dot (laser.py; rough aim
+    until calibrate.py has run). Its LED ring shows what it's doing and points too.
   - Teach it your own things: say "learn this" (or press T) and hold it up or click on
     it in the video; it collects pictures of it for a few seconds and asks what it is.
     Taught things are found by how they look, so YOUR keys, not anything key-like.
@@ -43,6 +44,7 @@ Or type in the Terminal window (not the video window):
     phone                  set up alerts on your phone for things you leave behind (phone.py)
     phone test             send a test alert
     left home              act as if your phone said you left home
+    ring test              LED ring: LED 0 red, LED 1 green, LED 4 blue (to set RING_LED0_DEG)
 In the video window: D, then click two corners = only look at the desk (D again = all).
     quit                   (or press Esc in the video window)
 
@@ -68,10 +70,14 @@ from src.vision.camera import capture, open_camera, reconnect_camera
 from src.vision.detector import CUTOFF_MARGIN, PICTURE_MATCH
 
 # ------------------------------------------------------------------ settings
-CAMERA = 1                 # 1 = the iPhone (Continuity Camera, wireless), 0 = Mac's built-in
-# A Wi-Fi camera works too: put its stream address here instead, e.g. for a Tapo (set a
-# "Camera Account" in the Tapo app: Advanced Settings):
-#   CAMERA = "rtsp://USER:PASSWORD@192.168.1.50:554/stream1"
+# The Tapo Wi-Fi camera (TCW61) on the iPhone hotspot. Its login is the "Camera Account"
+# from the Tapo app (Advanced Settings), kept in .env as CAMERA_USER and CAMERA_PASSWORD.
+# If the hotspot gives it another address, the app finds it there. 1 = the iPhone
+# (Continuity Camera), 0 = the Mac's built-in.
+CAMERA = "rtsp://172.20.10.5:554/stream1"
+# How far a Wi-Fi camera's picture runs behind; the laser waits this much longer before
+# trusting a frame. A guess: measure it once the laser is here.
+CAMERA_LAG_SECS = 0.8
 MIRROR_LEFT_RIGHT = False  # True if the camera faces you, so "left" means YOUR left
 DETECTOR = "owl"           # "owl" finds keys and earbuds; "yolo" is faster but misses them
 # Detector input size: 960 is OWLv2's native size; 768 is 1.7x faster for about the same
@@ -94,6 +100,20 @@ GEMINI = True
 PHONE = True
 ESSENTIALS = ["keys", "wallet", "id card", "earbuds case"]
 LEAVE_LOOK_SECS = 6
+# How it reaches the ESP32 (servos + laser): "usb", "wifi", or "auto" = USB when it's
+# plugged into the Mac, else Wi-Fi. Wi-Fi needs a network in
+# firmware/esp32_controller/src/secrets.h and the Mac on that same network. The first
+# time, macOS asks to let Terminal find devices on the local network: allow it.
+POINTER_LINK = "auto"
+# None = find it by itself (it announces itself every 2 s), or its address, as the
+# Serial Monitor shows when it joins the network, e.g. "172.20.10.4".
+POINTER_HOST = None
+# The LED ring on the device (GPIO 7): a dim breath while the camera is on, blue while
+# listening, a spinner while thinking, then green toward the thing found (amber: where it
+# was last seen; red flashes: not seen). Mount it facing the room, by the camera, so the
+# lit LED points at the object. Then type "ring test" and look at it from the front:
+RING_LED0_DEG = 90     # where the red LED (LED 0) is: 0 = right, 90 = top, 180 = left, 270 = bottom
+RING_CLOCKWISE = True  # the green one (LED 1) is clockwise from the red one
 
 # What it looks for -> words people might use when asking.
 # Add anything: the detector recognizes objects from their names.
@@ -565,6 +585,16 @@ def answer(label, obj, visible, mem, now):
     return f"I last saw your {label} {ago(now - obj['last_seen'])}, {where}."
 
 
+def ring_angle(obj):
+    """Which way the object is from the device, as a position on the LED ring: degrees
+    along its LEDs, from LED 0 (what the firmware's RF/RS/RA take)."""
+    dx = obj["cx"] - obj["frame_w"] / 2
+    dy = obj["cy"] - obj["frame_h"] / 2
+    # Seen from the front, the ring's right is the camera's left.
+    seen = math.degrees(math.atan2(-dy, -dx))
+    return ((RING_LED0_DEG - seen) if RING_CLOCKWISE else (seen - RING_LED0_DEG)) % 360
+
+
 SPEAKER = None  # voice.Speaker once the app is running
 CONVERSATION = collections.deque(maxlen=8)  # (time, "Person: ..." / "Device: ...") for Gemini
 CONVERSATION_SECS = 120  # older lines are old news
@@ -841,12 +871,18 @@ class App:
         self.teach = None      # while learning something: {"name", "phase", ...}
         self.spots = {}        # taught label -> where it's sitting: {"center", "still", "best"}
         self.last_taught = None  # the label taught last ("forget that", "call it ...")
+        self.last_pass = None  # when the latest detector pass started
+        self.pass_secs = 0.0   # seconds between passes (~0.4 on the Mac, 3+ on a laptop CPU)
 
     def update(self, candidates, frame, now, views=(), look=None):
         """candidates: [(label, confidence, (x1, y1, x2, y2))] from one finished detector pass.
         views: [(label, box, embedding, similarity)] for taught things in it. look: that
         pass's detector.Look of the whole view (to see hands)."""
         h, w = frame.shape[:2]
+        if self.last_pass is not None and now > self.last_pass:
+            gap = now - self.last_pass
+            self.pass_secs = gap if not self.pass_secs else 0.8 * self.pass_secs + 0.2 * gap
+        self.last_pass = now
         self.tracker.update(candidates, now)
         if views and not self.teach:
             self.learn_spots(views, w, now, look)
@@ -870,20 +906,43 @@ class App:
                     verb = "Remembered" if change == "new" else "Moved"
                     print(f"\n[memory] {verb}: {label}, {place_words(cx, cy, w, h)}")
         for label in list(self.tracks):
-            if now - self.tracks[label]["seen"] > VISIBLE_SECS:
+            if now - self.tracks[label]["seen"] > self.visible_secs():
                 del self.tracks[label]
 
+    def visible_secs(self):
+        """How long since it was seen still counts as in view: VISIBLE_SECS, or as long as
+        the tracker keeps boxing something it missed, if the detector is slower than that."""
+        from src.vision.tracker import MISS_PASSES
+
+        return max(VISIBLE_SECS, MISS_PASSES * self.pass_secs)
+
+    def in_view(self, seen, now):
+        """Was something last seen at `seen` (a pass's start time) in view right now? Counted
+        on the detector's clock: a pass's result only arrives a pass after it started, so on
+        a slow detector everything would already look stale by wall-clock time. The second
+        check notices a detector that has stopped."""
+        latest = self.last_pass if self.last_pass is not None else now
+        return latest - seen <= self.visible_secs() and now - latest <= self.visible_secs() + self.pass_secs
+
     def focus_spots(self, frame_size, now):
-        """Where to look again: the last spots of remembered small things that are out of
-        sight right now, most recently seen first. Empty when everything is in view."""
+        """Where to look again. First, small things seen once in the last pass but not
+        confirmed yet: found in a zoomed tile, they'd wait for that tile to come around
+        again (every 4th pass) for the second sighting; this zooms in on the very next
+        pass. Otherwise the last spots of remembered small things that are out of sight
+        right now, most recently seen first. Empty when everything is in view."""
         from src.vision.detector import zoom_region
 
         w, h = frame_size
-        rows = [r for r in self.mem.all() if r["label"] not in SURFACES
-                and (r["x2"] - r["x1"]) * (r["y2"] - r["y1"]) < 0.05 * w * h
-                and not self.locate(r["label"], now)[1]]
+        small = lambda x1, y1, x2, y2: (x2 - x1) * (y2 - y1) < 0.05 * w * h
         cols, nrows = TILES or (2, 2)
         zw, zh = int(min(w, 1.15 * w / cols)), int(min(h, 1.15 * h / nrows))  # a tile's size
+        new = [t.box for t in self.tracker.tracks
+               if t.fresh and not t.confirmed and t.label not in SURFACES and small(*t.box)]
+        if new:
+            return [zoom_region(box, (w, h), (zw, zh)) for box in new[:FOCUS_SPOTS]]
+        rows = [r for r in self.mem.all() if r["label"] not in SURFACES
+                and small(r["x1"], r["y1"], r["x2"], r["y2"])
+                and not self.locate(r["label"], now)[1]]
         spots = []
         for r in rows[:FOCUS_SPOTS]:
             sx, sy = w / r["frame_w"], h / r["frame_h"]
@@ -1194,27 +1253,47 @@ class App:
         if self.phone:
             self.phone.send(f"You forgot your {names}!", "\n".join(lines))
         say(f"You left without your {names}.")  # for whoever is still in the room
-        self.show(*left[0], now)
+        self.show(*left[0], now, ring="A")
 
-    def show(self, label, obj, now):
-        """Circle it in the live view and point the laser at it."""
+    def show(self, label, obj, now, ring="F"):
+        """Circle it in the live view, point the laser at it, and light the LED ring toward
+        it (ring: "F" found, "S" last seen there, "A" forgot it)."""
         self.highlight = (label, now + HIGHLIGHT_SECS)
+        self.pointer.ring(ring, ring_angle(obj))
         if self.aimer:
             # Close enough = within about a third of the object's size.
             tol = max(10, 0.3 * min(obj["x2"] - obj["x1"], obj["y2"] - obj["y1"]))
             self.aimer.start((obj["cx"], obj["cy"]), tol, (obj["frame_w"], obj["frame_h"]), now)
 
+    def point(self, name, now):
+        """Point at it without answering out loud (the website's /api/point)."""
+        label = name if name in TAUGHT else find_label(name) or taught_name(name) or name
+        obj, _ = self.locate(label, now)
+        if obj:
+            self.show(label, obj, now)
+        else:
+            say(f"I haven't seen your {label} yet.")
+
+    def aim_at(self, point, size, now):
+        """Point the laser at a spot in the room view: point and size in pixels."""
+        self.highlight = None
+        if not (self.aimer and self.pointer.connected):
+            print("(the laser isn't connected)")
+            return
+        self.aimer.start(point, max(10, 0.02 * min(size)), size, now)
+
     def locate(self, label, now):
         """(where it is or was, visible right now?). A live sighting wins over memory,
-        so it can answer about something you're holding before it has been remembered."""
+        so it can answer about something you're holding before it has been remembered.
+        The tracker has already confirmed it (two sightings), so in view = boxed in the video."""
         t = self.tracks.get(label)
-        if t and t["hits"] >= 2 and now - t["seen"] <= VISIBLE_SECS:
+        if t and self.in_view(t["seen"], now):
             x1, y1, x2, y2 = t["box"]
             return {"label": label, "x1": x1, "y1": y1, "x2": x2, "y2": y2,
                     "frame_w": t["frame_w"], "frame_h": t["frame_h"], "cx": t["cx"], "cy": t["cy"],
                     "last_seen": t["seen"], "moved_at": t["seen"], "snapshot": None}, True
         obj = self.mem.get(label)
-        return obj, bool(obj) and now - obj["last_seen"] <= VISIBLE_SECS
+        return obj, bool(obj) and self.in_view(obj["last_seen"], now)
 
     def command(self, text, now):
         """Handle one typed line. Returns False to quit."""
@@ -1266,6 +1345,15 @@ class App:
             return True
         if c == "left home":  # what the phone sends when you leave (or type it to test)
             self.left_home(now)
+            return True
+        if c == "ring test":
+            if not self.pointer.has_ring:
+                print("(No LED ring: is the ESP32 connected, with the latest firmware?)")
+            else:
+                self.pointer.ring("X")
+                print("LED 0 is red, LED 1 green, LED 4 blue, for 15 s. Looking at the ring from the "
+                      "front, set RING_LED0_DEG (where red is: 0 right, 90 top, 180 left, 270 bottom) "
+                      "and RING_CLOCKWISE (is green clockwise from red?).")
             return True
 
         # Teaching
@@ -1342,13 +1430,16 @@ class App:
             label = taught_name(m.group(1)) if m else None
         if not label:
             say("Sorry, I don't know that one yet. I can find: " + ", ".join(OBJECTS) + ".")
+            self.pointer.ring("N")
             return True
         obj, visible = self.locate(label, now)
         # Small things far away are missed for a few passes at a time: seen just now is "here".
         visible = visible or bool(obj) and now - obj["last_seen"] <= PRESENT_SECS
         say(answer(label, obj, visible, self.mem, now))
-        if obj:
-            self.show(label, obj, now)
+        if not obj:
+            self.pointer.ring("N")
+        else:
+            self.show(label, obj, now, ring="F" if visible else "S")
             if not visible and obj["snapshot"] and os.path.exists(obj["snapshot"]):
                 snap = cv2.imread(obj["snapshot"])
                 s = DISPLAY_W / 2 / snap.shape[1]
@@ -1386,11 +1477,11 @@ def main():
     # The detector reports a bit below each threshold, so the tracker can keep following
     # things whose score dips for a moment.
     detector = BackgroundDetector(model, keep_level, load_area(), TILES, TILE_SIZE)
-    cap = open_camera(CAMERA)
+    cap = open_camera(CAMERA, CAMERA_LAG_SECS)
 
     from src.vision.laser_tracker import Aimer, Calibration, RoughMap
 
-    pointer = Pointer()
+    pointer = Pointer(POINTER_LINK, POINTER_HOST)
     calib = Calibration.load()
     if calib:
         print(f"(Laser calibration loaded: {len(calib.points)} points, "
@@ -1405,8 +1496,10 @@ def main():
         phone = Phone(lambda: questions.put("left home"))
         print(f'(Phone alerts: ntfy topic {phone.topic}. Type "phone" for the setup.)')
     app = App(Memory(), pointer, Aimer(pointer, calib or RoughMap(PAN_CENTER, PAN_SPAN,
-                                                                   TILT_CENTER, TILT_SPAN)),
+                                                                   TILT_CENTER, TILT_SPAN),
+                                       open_camera.lag),
               detector, phone)
+    pointer.ring("W")  # the privacy light: the camera is on
     threading.Thread(target=read_questions, args=(questions,), daemon=True).start()
 
     try:
@@ -1495,6 +1588,7 @@ def main():
         if event == cv2.EVENT_LBUTTONDOWN:
             app.click_laptop((x / teach_scale, y / teach_scale), time.time())
     mouse_ready = False
+    voice_state = None
     while running:
         ok, frame = cap.read()
         if not ok:
@@ -1553,6 +1647,14 @@ def main():
                     voice.toggle()
                 elif kind == "click" and app.teach and app.teach["phase"] not in ("naming", "first name"):
                     app.click_teach((text[0] * frame.shape[1], text[1] * frame.shape[0]), now)
+                elif kind == "teach":
+                    print(f'\n(website: teach "{text}")')
+                    app.start_teach(text, None, now)
+                elif kind == "point":
+                    app.point(text, now)
+                elif kind == "aim":
+                    h, w = frame.shape[:2]
+                    app.aim_at((text[0] * w, text[1] * h), (w, h), now)
         while not questions.empty():
             text = questions.get()
             if web:
@@ -1590,6 +1692,9 @@ def main():
         app.check_leaving(now)
         app.aimer.update(frame, now)
         app.pointer.poll()
+        if voice and voice.state != voice_state:  # the LED ring shows listening/thinking
+            voice_state = voice.state
+            app.pointer.ring({"listening": "L", "thinking": "T"}.get(voice_state, "I"))
 
         s = DISPLAY_W / frame.shape[1]
         view = cv2.resize(frame, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
@@ -1641,6 +1746,7 @@ def main():
 
     if app.pointer.connected:
         app.aimer.stop()
+        app.pointer.ring("0")
         app.pointer.send("L0")
         app.pointer.ser.flush()
     if cap is not None:

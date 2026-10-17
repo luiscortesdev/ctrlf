@@ -26,7 +26,7 @@ import time
 
 import cv2
 
-from src.app import CAMERA, DISPLAY_W
+from src.app import CAMERA, CAMERA_LAG_SECS, DISPLAY_W, POINTER_HOST, POINTER_LINK
 from src.hardware.serial_client import Pointer
 from src.vision.camera import open_camera
 from src.vision.laser_tracker import (CALIB_PATH, LASER_SETTLE_SECS, SETTLE_SECS, TILT_MAX, TILT_MIN,
@@ -73,9 +73,9 @@ def sweep(camera, pointer, pans, tilts, log=print):
     order = [(p, t) for i, t in enumerate(tilts) for p in (pans if i % 2 == 0 else pans[::-1])]
     for n, (pan, tilt) in enumerate(order, 1):
         secs = pointer.move(pan, tilt, laser=False)
-        off = camera.wait(secs + SETTLE_SECS)
+        off = camera.wait(secs + SETTLE_SECS + open_camera.lag)
         pointer.send("L1")
-        on = camera.wait(LASER_SETTLE_SECS)
+        on = camera.wait(LASER_SETTLE_SECS + open_camera.lag)
         pointer.send("L0")
         dot = find_dot(off, on)
         if dot:
@@ -88,11 +88,12 @@ def sweep(camera, pointer, pans, tilts, log=print):
 
 
 def main():
-    cap = open_camera(CAMERA)
-    pointer = Pointer()
+    cap = open_camera(CAMERA, CAMERA_LAG_SECS)
+    pointer = Pointer(POINTER_LINK, POINTER_HOST)
     if not pointer.connected:
-        raise SystemExit("No esp32_pointer found. Plug the ESP32 in (COM port) and close "
-                         "anything else using it, like the Arduino Serial Monitor or ctrlf.py.")
+        raise SystemExit("No ESP32 pointer found. Plug the ESP32 in (COM port) or put it on "
+                         "Wi-Fi (firmware/esp32_controller/src/secrets.h), and close anything "
+                         "else using it, like the Arduino Serial Monitor or ctrlf.py.")
     input("The laser is about to sweep the desk. Make sure nobody is looking toward the "
           "head, then press Enter... ")
     camera = LiveCamera(cap)

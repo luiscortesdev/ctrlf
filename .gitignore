@@ -15,3 +15,5 @@ venv/
 view_*.jpg
 # The Gemini API key (GEMINI_API_KEY=...). Never commit it.
 .env
+# The ESP32's Wi-Fi name, password and key. Never commit it (secrets.example.h is the template).
+firmware/esp32_controller/src/secrets.h

@@ -11,7 +11,8 @@ running (or the URL has `?mock`), the dashboard runs on demo data instead.
 
 | Method | Path | What it does |
 |---|---|---|
-| GET | `/api/state` | Everything the dashboard shows (below). Polled about 4 times a second. |
+| GET | `/api/state` | Everything the dashboard shows (below) |
+| GET | `/api/events` | The same JSON, pushed the moment it changes (server-sent events: `data: {...}`). The dashboard uses this; it polls `/api/state` only if the browser can't |
 | POST | `/api/command` | `{"text": "..."}`: exactly like typing in the app's Terminal: `where are my keys?`, `learn this`, `this is my wallet`, `yes`, `no`, `cancel`, a name, `forget keys`, `wipe`, `list` |
 | POST | `/api/listen` | Push-to-talk, like SPACE in the video window |
 | POST | `/api/click` | `{"x": 0-1, "y": 0-1}`: while teaching, "it's this one" (like clicking the video window) |
@@ -19,6 +20,24 @@ running (or the URL has `?mock`), the dashboard runs on demo data instead.
 | GET | `/video/teach` | The laptop camera while teaching with it (MJPEG) |
 | GET | `/snapshots/<file>` | Last-seen snapshots |
 | GET | `/taught/<file>` | Photos of taught things |
+
+The same things one piece at a time, for scripts and other clients (the dashboard uses the
+ones above):
+
+| Method | Path | What it does |
+|---|---|---|
+| GET | `/api/status` | `status` from `/api/state` (`state`, `target`, `result`, `message`) plus `target_bbox`, `aim`, `teach`, `voice`, `detector_fps`, `laser_connected`, `now` |
+| GET | `/api/items` | `{"items": [...]}`: `items` from `/api/state`, each with `snapshot_url` (or `null`) |
+| GET | `/api/items/<name>/snapshot` | That thing's last-seen snapshot (the whole view, its box drawn on). 404 if there's none |
+| POST | `/api/query` | `{"query": "where are my keys?"}`: same as `/api/command`. Replies `{"ok": true, "action": "query", "query": ...}`; the answer shows up in `/api/status` |
+| POST | `/api/teach` | `{"label": "keys"}`: start teaching it, like saying "learn my keys" (up to 40 letters, numbers, spaces) |
+| POST | `/api/point` | `{"target": "keys"}`: point the laser at it (where it is, or where it was last seen), without answering out loud. `{"x": 0-1, "y": 0-1}`: point at that spot in the room view |
+| GET | `/api/video_feed` | Same as `/video` |
+
+`/api/status`, `/api/items` and the snapshot route answer 503 for the second or so before
+the app's first pass. Bad requests get 400 with `{"ok": false, "error": "..."}`. Every
+`POST` is queued for the main loop, so it replies straight away; watch `/api/status` for
+what happened. Tests: `pytest tests/test_web_api.py`.
 
 ## `/api/state`
 
@@ -53,6 +72,16 @@ running (or the URL has `?mock`), the dashboard runs on demo data instead.
   `App.teach` in `src/app.py`: `first name`, `looking`, `naming`, `placing`, `confirm`,
   `learning`, `click`.
 - `bbox`: fractions of the camera image `[x1, y1, x2, y2]`. Furniture isn't listed.
+- `visible`: in the live view right now, which the dashboard shows as **In view** (otherwise
+  **Out of sight**, with when it was last seen; the thing just asked about shows **Target**).
+  It means seen in the last 3 s, or in the last 5 detector passes if the detector is slower
+  than that (OWLv2 on a laptop CPU takes about 3.4 s a pass), counted from when the pass
+  ran, not when its result arrived.
+- `items`: what it remembers, plus what's boxed in the live view right now but not
+  remembered yet (that takes a few still passes, and something being carried never is).
+  Those have `"snapshot": null` until they're remembered.
+- The state is rebuilt as soon as a detector pass finishes or the app says or hears
+  something, and at least every 0.2 s otherwise.
 
 ## Adding something new
 
@@ -61,3 +90,5 @@ running (or the URL has `?mock`), the dashboard runs on demo data instead.
 2. Read it in `applyState()` in `js/api.js` and emit an event for the dashboard.
 3. New actions: add a `POST` in `_Handler.do_POST`, queue it on `bridge.actions`, and
    handle it in the `if web:` block of the main loop in `src/app.py`.
+4. Add a test in `tests/test_web_api.py`: it runs the real server on a free port with a
+   stand-in app.
