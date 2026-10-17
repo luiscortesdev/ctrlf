@@ -9,8 +9,9 @@ What it does
     ("Your keys are in the back left, just left of the laptop.") and circles
     them on screen. If they're out of sight, it says when and where it last saw
     them and shows that snapshot.
-  - If the ESP32 pointer is plugged in, it swings the laser toward the object and
-    nudges it on by watching the dot (laser.py; rough aim until calibrate.py has run).
+  - If the ESP32 pointer is connected (USB, or Wi-Fi: see POINTER_LINK), it swings the
+    laser toward the object and nudges it on by watching the dot (laser.py; rough aim
+    until calibrate.py has run). Its LED ring shows what it's doing and points too.
   - Teach it your own things: say "learn this" (or press T) and hold it up or click on
     it in the video; it collects pictures of it for a few seconds and asks what it is.
     Taught things are found by how they look, so YOUR keys, not anything key-like.
@@ -43,6 +44,7 @@ Or type in the Terminal window (not the video window):
     phone                  set up alerts on your phone for things you leave behind (phone.py)
     phone test             send a test alert
     left home              act as if your phone said you left home
+    ring test              LED ring: LED 0 red, LED 1 green, LED 4 blue (to set RING_LED0_DEG)
 In the video window: D, then click two corners = only look at the desk (D again = all).
     quit                   (or press Esc in the video window)
 
@@ -95,6 +97,20 @@ GEMINI = True
 PHONE = True
 ESSENTIALS = ["keys", "wallet", "id card", "earbuds case"]
 LEAVE_LOOK_SECS = 6
+# How it reaches the ESP32 (servos + laser): "usb", "wifi", or "auto" = USB when it's
+# plugged into the Mac, else Wi-Fi. Wi-Fi needs a network in
+# firmware/esp32_controller/src/secrets.h and the Mac on that same network. The first
+# time, macOS asks to let Terminal find devices on the local network: allow it.
+POINTER_LINK = "auto"
+# None = find it by itself (it announces itself every 2 s), or its address, as the
+# Serial Monitor shows when it joins the network, e.g. "172.20.10.4".
+POINTER_HOST = None
+# The LED ring on the device (GPIO 7): a dim breath while the camera is on, blue while
+# listening, a spinner while thinking, then green toward the thing found (amber: where it
+# was last seen; red flashes: not seen). Mount it facing the room, by the camera, so the
+# lit LED points at the object. Then type "ring test" and look at it from the front:
+RING_LED0_DEG = 90     # where the red LED (LED 0) is: 0 = right, 90 = top, 180 = left, 270 = bottom
+RING_CLOCKWISE = True  # the green one (LED 1) is clockwise from the red one
 
 # What it looks for -> words people might use when asking.
 # Add anything: the detector recognizes objects from their names.
@@ -556,6 +572,16 @@ def answer(label, obj, visible, mem, now):
     if visible:
         return f"Your {label} {verb} {where}."
     return f"I last saw your {label} {ago(now - obj['last_seen'])}, {where}."
+
+
+def ring_angle(obj):
+    """Which way the object is from the device, as a position on the LED ring: degrees
+    along its LEDs, from LED 0 (what the firmware's RF/RS/RA take)."""
+    dx = obj["cx"] - obj["frame_w"] / 2
+    dy = obj["cy"] - obj["frame_h"] / 2
+    # Seen from the front, the ring's right is the camera's left.
+    seen = math.degrees(math.atan2(-dy, -dx))
+    return ((RING_LED0_DEG - seen) if RING_CLOCKWISE else (seen - RING_LED0_DEG)) % 360
 
 
 SPEAKER = None  # voice.Speaker once the app is running
@@ -1214,11 +1240,13 @@ class App:
         if self.phone:
             self.phone.send(f"You forgot your {names}!", "\n".join(lines))
         say(f"You left without your {names}.")  # for whoever is still in the room
-        self.show(*left[0], now)
+        self.show(*left[0], now, ring="A")
 
-    def show(self, label, obj, now):
-        """Circle it in the live view and point the laser at it."""
+    def show(self, label, obj, now, ring="F"):
+        """Circle it in the live view, point the laser at it, and light the LED ring toward
+        it (ring: "F" found, "S" last seen there, "A" forgot it)."""
         self.highlight = (label, now + HIGHLIGHT_SECS)
+        self.pointer.ring(ring, ring_angle(obj))
         if self.aimer:
             # Close enough = within about a third of the object's size.
             tol = max(10, 0.3 * min(obj["x2"] - obj["x1"], obj["y2"] - obj["y1"]))
@@ -1305,6 +1333,15 @@ class App:
         if c == "left home":  # what the phone sends when you leave (or type it to test)
             self.left_home(now)
             return True
+        if c == "ring test":
+            if not self.pointer.has_ring:
+                print("(No LED ring: is the ESP32 connected, with the latest firmware?)")
+            else:
+                self.pointer.ring("X")
+                print("LED 0 is red, LED 1 green, LED 4 blue, for 15 s. Looking at the ring from the "
+                      "front, set RING_LED0_DEG (where red is: 0 right, 90 top, 180 left, 270 bottom) "
+                      "and RING_CLOCKWISE (is green clockwise from red?).")
+            return True
 
         # Teaching
         phase = self.teach and self.teach["phase"]
@@ -1380,13 +1417,16 @@ class App:
             label = taught_name(m.group(1)) if m else None
         if not label:
             say("Sorry, I don't know that one yet. I can find: " + ", ".join(OBJECTS) + ".")
+            self.pointer.ring("N")
             return True
         obj, visible = self.locate(label, now)
         # Small things far away are missed for a few passes at a time: seen just now is "here".
         visible = visible or bool(obj) and now - obj["last_seen"] <= PRESENT_SECS
         say(answer(label, obj, visible, self.mem, now))
-        if obj:
-            self.show(label, obj, now)
+        if not obj:
+            self.pointer.ring("N")
+        else:
+            self.show(label, obj, now, ring="F" if visible else "S")
             if not visible and obj["snapshot"] and os.path.exists(obj["snapshot"]):
                 snap = cv2.imread(obj["snapshot"])
                 s = DISPLAY_W / 2 / snap.shape[1]
@@ -1426,7 +1466,7 @@ def main():
 
     from src.vision.laser_tracker import Aimer, Calibration, RoughMap
 
-    pointer = Pointer()
+    pointer = Pointer(POINTER_LINK, POINTER_HOST)
     calib = Calibration.load()
     if calib:
         print(f"(Laser calibration loaded: {len(calib.points)} points, "
@@ -1443,6 +1483,7 @@ def main():
     app = App(Memory(), pointer, Aimer(pointer, calib or RoughMap(PAN_CENTER, PAN_SPAN,
                                                                    TILT_CENTER, TILT_SPAN)),
               detector, phone)
+    pointer.ring("W")  # the privacy light: the camera is on
     threading.Thread(target=read_questions, args=(questions,), daemon=True).start()
 
     if sys.platform == "darwin":
@@ -1532,6 +1573,7 @@ def main():
         if event == cv2.EVENT_LBUTTONDOWN:
             app.click_laptop((x / teach_scale, y / teach_scale), time.time())
     mouse_ready = False
+    voice_state = None
     while running:
         ok, frame = cap.read()
         if not ok:
@@ -1634,6 +1676,9 @@ def main():
         app.check_leaving(now)
         app.aimer.update(frame, now)
         app.pointer.poll()
+        if voice and voice.state != voice_state:  # the LED ring shows listening/thinking
+            voice_state = voice.state
+            app.pointer.ring({"listening": "L", "thinking": "T"}.get(voice_state, "I"))
 
         s = DISPLAY_W / frame.shape[1]
         view = cv2.resize(frame, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
@@ -1685,6 +1730,7 @@ def main():
 
     if app.pointer.connected:
         app.aimer.stop()
+        app.pointer.ring("0")
         app.pointer.send("L0")
         app.pointer.ser.flush()
     if cap is not None:
