@@ -36,7 +36,7 @@ drives the servos and the laser.
 | `src/vision/teach.py` | Finds a just-taught thing in the room view |
 | `src/vision/laser_tracker.py` | Finds the laser dot, pixel-to-angle calibration, closed-loop aiming |
 | `src/vision/camera.py` | Opening the camera (iPhone, Mac, or a network stream) and reconnecting |
-| `src/hardware/serial_client.py` | Serial link to the ESP32 |
+| `src/hardware/serial_client.py` | Link to the ESP32, over USB or Wi-Fi |
 | `src/voice.py` | Push-to-talk (Gemini, with mlx-whisper as the fallback) and speaking the answers |
 | `src/gemini.py` | Gemini: understands the spoken question, speaks the answer |
 | `src/phone.py` | Phone alerts through ntfy.sh when you leave home without something |
@@ -44,7 +44,7 @@ drives the servos and the laser.
 | `web/` | The website: 3D intro + dashboard (plain HTML/CSS/JS, works offline) |
 | `scripts/camera_test.py` | Live view with boxes, for tuning thresholds |
 | `scripts/calibrate.py` | Laser calibration sweep (writes `data/calibration.json`) |
-| `firmware/esp32_controller/` | ESP32-S3 firmware: smooth servo glides, anti-backlash, laser auto-off |
+| `firmware/esp32_controller/` | ESP32-S3 firmware: smooth servo glides, anti-backlash, laser auto-off, Wi-Fi, LED ring |
 | `data/` | What it remembers and learns. Not in git: it's photos of your room |
 
 ## Setup (Mac, Apple Silicon)
@@ -80,18 +80,29 @@ Camera: the iPhone through Continuity Camera is the default (`CAMERA = 1` in
 loud, T = teach something, D = only look at a desk area, Esc = quit. Typed commands:
 `where are my keys?`, `learn this`, `forget keys`, `call it ball` (rename what was just
 taught), `list`, `wipe`, `servo 90 120`, `laser on` / `laser off`, `save`, `phone` (alert
-setup), `phone test`, `left home`, `quit`.
+setup), `phone test`, `left home`, `ring test` (which way the LED ring faces), `quit`.
 
 Tests: `pytest`.
 
 ## ESP32 pointer
 
-ESP32-S3 DevKitC (N16R8), plugged in through its COM port. Pan servo signal on GPIO4,
-tilt on GPIO5, laser on GPIO6. Power the servos from a separate 5V supply with a 1000 uF
-capacitor across it, and connect its ground to the ESP32's GND.
+ESP32-S3 DevKitC (N16R8). Pan servo signal on GPIO4, tilt on GPIO5, laser on GPIO6. Power
+the servos from a separate 5V supply with a 1000 uF capacitor across it, and connect its
+ground to the ESP32's GND. LED ring (16 x WS2812): DI on GPIO7, VCC on the board's 3V3 pin
+(not 5V: the board's "5Vin" pin is an input, and a 5 V ring reads 3.3 V data unreliably).
+
+It works over USB (the COM port) or Wi-Fi. For Wi-Fi, copy
+`firmware/esp32_controller/src/secrets.example.h` to `secrets.h` next to it and put your
+network in it (2.4 GHz only; a phone hotspot with Maximize Compatibility works, campus
+Wi-Fi with a login doesn't). The Mac must be on the same network. With `POINTER_LINK =
+"auto"` (src/app.py) the app uses USB when the board is plugged in, else finds it on
+Wi-Fi by itself; only connections that send the key from `secrets.h` are obeyed, and the
+laser turns off if the app goes quiet.
 
 Build and upload with PlatformIO (`pio run -t upload`, see `platformio.ini`) or the
 Arduino IDE (ESP32 core 3.x, board "ESP32S3 Dev Module", Flash Size 16MB, PSRAM OPI).
-Serial at 115200: `P<deg> T<deg> L0/L1` (tenths allowed), `C`, `?`; replies
-`OK P92.5 T125.0 L0`. Higher tilt points down; set TILT_MIN/TILT_MAX so the beam can
-never go above table height. The laser turns itself off after 15 s.
+Commands at 115200 baud or over Wi-Fi: `P<deg> T<deg> L0/L1` (tenths allowed), `C`, `?`;
+replies `OK P92.5 T125.0 L0 R1`. LED ring: `RW` watching, `RL` listening, `RT` thinking,
+`RF<deg>` found, `RS<deg>` last seen, `RN` not seen, `RX` test (see main.cpp). Higher tilt
+points down; set TILT_MIN/TILT_MAX so the beam can never go above table height. The laser
+turns itself off after 15 s.

@@ -73,7 +73,7 @@ class _Mem:
 
 
 def test_point_from_the_website():
-    pointer = type("Pointer", (), {"connected": True})()
+    pointer = type("Pointer", (), {"connected": True, "ring": lambda self, *a: None})()
     a = app.App(_Mem(), pointer, _Aimer())
     a.point("airpods", 100.0)                          # its other name
     assert a.highlight[0] == "earbuds case"
