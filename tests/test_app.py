@@ -55,3 +55,34 @@ def test_find_dot():
     x, y = laser_tracker.find_dot(off, on)
     assert abs(x - 302.5) < 2 and abs(y - 202.5) < 2
     assert laser_tracker.find_dot(off, off.copy()) is None
+
+
+class _Aimer:
+    def __init__(self):
+        self.started = []
+
+    def start(self, target, tol, size, now):
+        self.started.append((target, tol, size))
+
+
+class _Mem:
+    def get(self, label):
+        if label == "earbuds case":
+            return {"label": label, "x1": 100, "y1": 100, "x2": 140, "y2": 120, "cx": 120, "cy": 110,
+                    "frame_w": 640, "frame_h": 360, "last_seen": 0.0, "snapshot": None}
+
+
+def test_point_from_the_website():
+    pointer = type("Pointer", (), {"connected": True})()
+    a = app.App(_Mem(), pointer, _Aimer())
+    a.point("airpods", 100.0)                          # its other name
+    assert a.highlight[0] == "earbuds case"
+    assert a.aimer.started == [((120, 110), 10, (640, 360))]
+
+    a.aim_at((320.0, 180.0), (640, 360), 101.0)        # a spot in the view
+    assert a.highlight is None
+    assert a.aimer.started[-1] == ((320.0, 180.0), 10, (640, 360))
+
+    pointer.connected = False
+    a.aim_at((10.0, 10.0), (640, 360), 102.0)
+    assert len(a.aimer.started) == 2                   # no laser: nothing to aim
