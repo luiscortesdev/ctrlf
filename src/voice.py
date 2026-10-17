@@ -225,6 +225,7 @@ class Speaker:
         self.queue = queue.Queue()
         self.turn = 0  # stop() starts a new turn: lines from before it aren't said
         self.proc = None
+        self.used_up_told = False
         threading.Thread(target=self._run, daemon=True).start()
 
     def say(self, text):
@@ -237,6 +238,8 @@ class Speaker:
             proc.terminate()
 
     def _run(self):
+        from src import gemini
+
         while True:
             turn, text = self.queue.get()
             if turn != self.turn:
@@ -245,7 +248,12 @@ class Speaker:
                 if self.use_gemini and self._gemini(text, turn):
                     continue
             except Exception as e:
-                print(f"\n(Gemini voice: {e!r:.160}. Using the Mac's.)")
+                if not isinstance(e, gemini.VoiceUsedUp):
+                    print(f"\n(Gemini voice: {e!r:.160}. Using the Mac's.)")
+                elif not self.used_up_told:  # say it once, not with every answer
+                    self.used_up_told = True
+                    print("\n(Gemini voice: the free quota (10 answers a day) is used up and the "
+                          "key has no paid credits. Using the Mac's voice until it resets.)")
             if turn == self.turn:
                 self.proc = subprocess.Popen(["say"] + (["-v", SAY_VOICE] if SAY_VOICE else []) + [text])
                 self.proc.wait()
