@@ -56,6 +56,14 @@ TYPES = {  # set explicitly: Windows' registry can map .js to text/plain
 }
 
 
+class _Server(ThreadingHTTPServer):
+    daemon_threads = True
+    # How many new connections can wait to be accepted. The default is 5, and macOS resets
+    # the ones past that instead of making them wait: with 6 browsers' requests at once
+    # some failed, with 8 almost half did.
+    request_queue_size = 64
+
+
 class Stream:
     """Latest JPEG of one video feed, handed to every connected browser."""
 
@@ -103,12 +111,11 @@ class WebBridge:
             pass
         Handler.bridge = bridge
         try:
-            self.server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+            self.server = _Server(("127.0.0.1", port), Handler)
         except OSError as e:
             print(f"(website off: port {port} is busy ({e}). Stop the other server, "
                   f"or set CTRLF_WEB_PORT to another port.)")
             return False
-        self.server.daemon_threads = True
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         print(f"Website: http://localhost:{self.port}  (dashboard: /dashboard.html)")
