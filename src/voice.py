@@ -4,17 +4,21 @@ Push-to-talk voice for Ctrl+F for Your Room: listening, and talking back.
 Press SPACE in the video window, hear a "tink", ask your question. It stops by itself
 when you stop talking (or press SPACE again) and plays a "pop". The recording goes to
 Gemini (gemini.py), which hears it and works out what you want: "did you see my AirPods?",
-"and my wallet?", "nah, wrong one". Meanwhile Whisper turns it into text on the Mac's GPU
-(mlx-whisper); that's used instead if Gemini doesn't answer in time (no Wi-Fi, no key).
+"and my wallet?", "nah, wrong one". Meanwhile Whisper turns it into text on this computer
+(mlx-whisper on an Apple Silicon Mac, transformers anywhere else); that's used instead if
+Gemini doesn't answer in time (no Wi-Fi, no key).
 
-Speaker says the answers in Gemini's voice, or with the Mac's `say` without it.
+Speaker says the answers in Gemini's voice, or with the computer's own voice without it
+(`say` on a Mac, Windows' built-in speech, espeak on Linux).
 
-The first run downloads the Whisper model (~480 MB). macOS asks Terminal for microphone
-permission the first time; approve it.
+The first run downloads the Whisper model (~150-480 MB). macOS asks Terminal for
+microphone permission the first time; approve it.
 """
 
 import hashlib
 import os
+import shutil
+import sys
 import queue
 import re
 import subprocess
@@ -26,6 +30,10 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import numpy as np
 
 MODEL = "mlx-community/whisper-small.en-mlx"  # 0.25 s per question; base.en is faster, sloppier
+# Not on an Apple Silicon Mac: Whisper through transformers. base.en takes about 1 s per
+# question on a laptop CPU; small.en is better but 3x slower there (fine with an NVIDIA GPU).
+CPU_MODEL = "openai/whisper-base.en"
+GPU_MODEL = "openai/whisper-small.en"
 RATE = 16000
 BLOCK = RATE // 10      # read the mic in 0.1 s blocks
 MAX_SECS = 7.0          # longest question
@@ -98,14 +106,14 @@ class Listener:
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._misses, self._rest_until = 0, 0.0
+        self._whisper = None
         threading.Thread(target=self._warm_up, daemon=True).start()
 
     def _transcribe(self, audio):
-        import mlx_whisper
-
         with self._lock:
-            return mlx_whisper.transcribe(audio, path_or_hf_repo=MODEL, language="en",
-                                          condition_on_previous_text=False)["text"].strip()
+            if self._whisper is None:
+                self._whisper = load_whisper()
+            return self._whisper(audio)
 
     def _warm_up(self):
         try:
@@ -188,7 +196,7 @@ class Listener:
         blocks, ears = [], Endpointer()
         # Mic first, then the tink: people start talking the moment they press the button.
         with sd.InputStream(samplerate=RATE, channels=1, dtype="float32", blocksize=BLOCK) as mic:
-            subprocess.Popen(["afplay", START_SOUND])
+            cue(START_SOUND)
             t0 = time.time()  # opening can wait on the permission prompt the first time
             why = "time limit"
             while time.time() - t0 < MAX_SECS:
@@ -199,7 +207,7 @@ class Listener:
                 if ears.add(blocks[-1]):
                     why = "silence"
                     break
-        subprocess.Popen(["afplay", STOP_SOUND])
+        cue(STOP_SOUND)
         audio = np.concatenate(blocks) if blocks else np.zeros(BLOCK, np.float32)
         if LOG_DIR:
             path = os.path.join(LOG_DIR, time.strftime("question_%H%M%S.wav"))
@@ -211,6 +219,66 @@ class Listener:
             print(f"\n(voice: {len(audio) / RATE:.1f} s, stopped by {why}, "
                   f"loudest {ears.peak:.3f}, heard speech: {ears.heard}; saved {path})")
         return audio, ears.heard
+
+
+def load_whisper():
+    """A function: 16 kHz float32 audio -> text. mlx-whisper on an Apple Silicon Mac (the
+    GPU, fastest); otherwise Whisper through transformers (CPU, or an NVIDIA GPU)."""
+    if sys.platform == "darwin":
+        try:
+            import mlx_whisper
+
+            return lambda audio: mlx_whisper.transcribe(
+                audio, path_or_hf_repo=MODEL, language="en",
+                condition_on_previous_text=False)["text"].strip()
+        except ImportError:
+            pass
+    import torch
+    from transformers import pipeline
+
+    cuda = torch.cuda.is_available()
+    asr = pipeline("automatic-speech-recognition", model=GPU_MODEL if cuda else CPU_MODEL,
+                   device=0 if cuda else -1, dtype=torch.float16 if cuda else torch.float32)
+    return lambda audio: asr({"raw": audio, "sampling_rate": RATE})["text"].strip()
+
+
+def system_say(text):
+    """Says text with the computer's own voice; returns the process (None if it has none).
+    Text goes in through stdin on Windows, so quotes in it can't break the command."""
+    if sys.platform == "darwin":
+        return subprocess.Popen(["say"] + (["-v", SAY_VOICE] if SAY_VOICE else []) + [text])
+    if sys.platform == "win32":
+        script = ("Add-Type -AssemblyName System.Speech; "
+                  "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+                  "$s.Speak([Console]::In.ReadToEnd())")
+        proc = subprocess.Popen(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                                stdin=subprocess.PIPE, creationflags=subprocess.CREATE_NO_WINDOW)
+        proc.stdin.write(text.encode("utf-8", "ignore"))
+        proc.stdin.close()
+        return proc
+    for cmd in ("espeak-ng", "espeak", "spd-say"):
+        if shutil.which(cmd):
+            return subprocess.Popen([cmd, text])
+    return None
+
+
+def _tone(freq, secs, rate=44100):
+    t = np.arange(int(secs * rate)) / rate
+    return (0.25 * np.sin(2 * np.pi * freq * t) * np.exp(-t * 18)).astype(np.float32), rate
+
+
+def cue(sound):
+    """The "tink" (START_SOUND) or "pop" (STOP_SOUND): the Mac's own sounds, or a short
+    tone elsewhere. Never waits, never fails."""
+    try:
+        if sys.platform == "darwin" and os.path.exists(sound):
+            subprocess.Popen(["afplay", sound])
+            return
+        import sounddevice as sd
+
+        sd.play(*_tone(1800 if sound == START_SOUND else 700, 0.15))
+    except Exception:
+        pass
 
 
 class Speaker:
@@ -245,10 +313,11 @@ class Speaker:
                 if self.use_gemini and self._gemini(text, turn):
                     continue
             except Exception as e:
-                print(f"\n(Gemini voice: {e!r:.160}. Using the Mac's.)")
+                print(f"\n(Gemini voice: {e!r:.160}. Using the computer's own voice.)")
             if turn == self.turn:
-                self.proc = subprocess.Popen(["say"] + (["-v", SAY_VOICE] if SAY_VOICE else []) + [text])
-                self.proc.wait()
+                self.proc = system_say(text)
+                if self.proc:
+                    self.proc.wait()
 
     def _gemini(self, text, turn):
         """Says text in Gemini's voice. False if it didn't start in time."""
@@ -274,7 +343,7 @@ class Speaker:
         try:
             first = chunks.get(timeout=SPEECH_WAIT)
         except queue.Empty:
-            print(f"\n(Gemini voice: nothing after {SPEECH_WAIT} s. Using the Mac's.)")
+            print(f"\n(Gemini voice: nothing after {SPEECH_WAIT} s. Using the computer's own voice.)")
             return False
         if isinstance(first, Exception):
             raise first

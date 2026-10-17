@@ -56,7 +56,6 @@ import os
 import queue
 import re
 import sqlite3
-import subprocess
 import sys
 import threading
 import time
@@ -65,7 +64,7 @@ import cv2
 import numpy as np
 
 from src.hardware.serial_client import Pointer
-from src.vision.camera import open_camera, reconnect_camera
+from src.vision.camera import capture, open_camera, reconnect_camera
 from src.vision.detector import CUTOFF_MARGIN, PICTURE_MATCH
 
 # ------------------------------------------------------------------ settings
@@ -87,7 +86,7 @@ TILE_SIZE = 640
 DISPLAY_W = 1280           # width of the live view window
 VOICE = True               # SPACE in the video window = push-to-talk (needs mlx-whisper)
 # Gemini hears the questions and says the answers (src/gemini.py; needs GEMINI_API_KEY in .env
-# and internet). It falls back to Whisper and the Mac's voice by itself. False = those only.
+# and internet). It falls back to Whisper and the computer's own voice by itself. False = those only.
 GEMINI = True
 # Phone alerts (src/phone.py): when your phone says you've left home, it looks for these for
 # LEAVE_LOOK_SECS, and whatever is still sitting in the room gets pushed to your phone.
@@ -171,6 +170,14 @@ HIGHLIGHT_SECS = 6    # how long the green circle stays after a question
 # this checks it every pass. Zooming in further didn't help: keys on a chair across the
 # room scored 0.45 at tile zoom and no better in tighter crops.
 FOCUS_SPOTS = 6       # how many missing things' spots it takes turns over
+
+# The settings above are for a computer with a GPU (Apple Silicon or NVIDIA). Without one
+# they'd take 20+ seconds a pass, so src/machine.py lightens them, and CTRLF_* in .env
+# overrides any of them (see machine.py).
+from src import machine  # noqa: E402
+
+DETECTOR, DETECT_SIZE, TILES, FOCUS_SPOTS, CAMERA, TEACH_CAMERA, MACHINE = machine.tune(
+    DETECTOR, DETECT_SIZE, TILES, FOCUS_SPOTS, CAMERA, TEACH_CAMERA)
 
 # Rough laser aim, used only until calibrate.py has made calibration.json.
 # If the head moves the wrong way, flip the sign of that SPAN.
@@ -570,8 +577,10 @@ def say(text):
     CONVERSATION.append((time.time(), f"Device: {text}"))
     if SPEAKER:
         SPEAKER.say(text)
-    elif sys.platform == "darwin":
-        subprocess.Popen(["say", text])  # the Mac's built-in voice
+    else:
+        from src.voice import system_say
+
+        system_say(text)  # the computer's own voice
 
 
 TEACH_STATES = {  # what it's doing while learning something, for Gemini
@@ -1369,8 +1378,10 @@ def main():
     from src.vision.detector import BackgroundDetector, make_detector
     from src.vision.glide import Glide
 
+    print(f"({MACHINE})")
     print(f"Loading the {DETECTOR} detector (the first run downloads it)...")
     model = make_detector(DETECTOR, PROMPTS, DETECT_SIZE)
+    governor = machine.Governor(model)
     load_taught(model)
     # The detector reports a bit below each threshold, so the tracker can keep following
     # things whose score dips for a moment.
@@ -1398,20 +1409,19 @@ def main():
               detector, phone)
     threading.Thread(target=read_questions, args=(questions,), daemon=True).start()
 
-    if sys.platform == "darwin":
-        try:
-            from src.voice import Speaker
+    try:
+        from src.voice import Speaker
 
-            SPEAKER = Speaker(use_gemini=GEMINI)
-        except ImportError as e:
-            print(f"(speaking with the Mac's say: {e})")
+        SPEAKER = Speaker(use_gemini=GEMINI)
+    except ImportError as e:
+        print(f"(speaking with the computer's own voice: {e})")
     if GEMINI:
         from src import gemini
 
         def check_gemini():
             problem = gemini.check()
             print("\n(Gemini: ready)" if problem is None else
-                  f"\n(Gemini not working: {problem}. Whisper and the Mac's voice fill in.)")
+                  f"\n(Gemini not working: {problem}. Whisper and the computer's own voice fill in.)")
         threading.Thread(target=check_gemini, daemon=True).start()
 
     # The website (web/): http://localhost:8000. See src/web.py.
@@ -1441,7 +1451,7 @@ def main():
                     questions.put(text)
             voice = Listener(heard, (lambda: voice_context(app)) if GEMINI else None)
         except ImportError as e:
-            print(f"(voice off: {e}. pip install mlx-whisper sounddevice)")
+            print(f"(voice off: {e}. pip install -r requirements.txt)")
 
     # For debugging: CTRLF_DET_LOG=<folder> logs every detector pass and a frame every 2 s.
     det_log = os.environ.get("CTRLF_DET_LOG")
@@ -1505,6 +1515,7 @@ def main():
             look = detector.last_look[2] if detector.last_look and detector.last_look[0] == seq else None
             app.update(candidates, det_frame, det_time, views, look)
             detector.focus = app.focus_spots(det_frame.shape[1::-1], det_time)
+            governor.update(detector, seq)
             glide.anchor(app.tracker.shown(), det_frame.shape[1::-1], det_time)
             if app.teach and detector.last_look and detector.last_look[0] == seq:
                 app.on_pass(det_frame, detector.last_look[2], det_time)
@@ -1551,7 +1562,7 @@ def main():
         # Teaching with the laptop camera: open it only while it's needed.
         want_laptop = bool(app.teach and app.teach["laptop"] and app.teach["phase"] == "looking")
         if want_laptop and teach_cap is None:
-            teach_cap = cv2.VideoCapture(TEACH_CAMERA)
+            teach_cap = capture(TEACH_CAMERA)
             if teach_cap.isOpened() and teach_cap.read()[0]:
                 cv2.namedWindow(TEACH_WINDOW)
                 cv2.setMouseCallback(TEACH_WINDOW, on_laptop_click)
