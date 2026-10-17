@@ -1,0 +1,42 @@
+camera:
+  device_index: 0
+  width: 1280
+  height: 720
+  fps: 30
+
+serial:
+  port: "/dev/ttyUSB0"      # On Windows: "COM3", on Mac: "/dev/cu.usbserial-*"
+  baud_rate: 115200
+  timeout_seconds: 1.0
+
+servos:
+  pan_min: 10
+  pan_max: 170
+  pan_default: 90
+  tilt_min: 0               # Down toward table
+  tilt_max: 45              # Maximum upward angle (safety limit)
+  tilt_default: 20
+  invert_pan: false
+  invert_tilt: false
+  kp_x: 0.05                # Proportional gain for visual servoing
+  kp_y: 0.05
+  max_step_deg: 3
+
+laser:
+  hsv_lower_1: [0, 100, 200]
+  hsv_upper_1: [10, 255, 255]
+  hsv_lower_2: [160, 100, 200]
+  hsv_upper_2: [180, 255, 255]
+  min_contour_area: 2
+  max_contour_area: 120
+
+vocabulary:
+  - "keys"
+  - "wallet"
+  - "phone"
+  - "airpods"
+  - "glasses"
+  - "charger"
+  - "water bottle"
+  - "laptop"
+  - "mouse"
