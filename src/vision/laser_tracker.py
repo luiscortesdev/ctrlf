@@ -212,8 +212,9 @@ class Aimer:
     MAX_TRIES = 5
     HOLD_SECS = 8.0  # how long the laser stays on the target afterwards
 
-    def __init__(self, pointer, mapping):
-        self.pointer, self.map = pointer, mapping
+    def __init__(self, pointer, mapping, lag=0.0):
+        # lag: how far the camera's picture runs behind; every wait gets that much longer
+        self.pointer, self.map, self.lag = pointer, mapping, lag
         self.state, self.wait = "idle", 0.0
         self.target = self.dot = None
         self.message = ""
@@ -242,7 +243,7 @@ class Aimer:
 
     def _go(self, angles, now):
         secs = self.pointer.move(*angles, laser=False)
-        self.state, self.wait = "off", now + secs + SETTLE_SECS
+        self.state, self.wait = "off", now + secs + SETTLE_SECS + self.lag
 
     def _hold(self, now, message):
         self.pointer.send("L1")
@@ -255,7 +256,7 @@ class Aimer:
         if self.state == "off":          # head has arrived, laser off: background frame
             self.off = frame
             self.pointer.send("L1")
-            self.state, self.wait = "on", now + LASER_SETTLE_SECS
+            self.state, self.wait = "on", now + LASER_SETTLE_SECS + self.lag
         elif self.state == "on":         # laser on: find the dot and correct
             self._measure(frame, now)
         elif self.state == "hold":       # done showing it
@@ -272,7 +273,7 @@ class Aimer:
             self.misses += 1
             if self.misses <= 2:  # someone moved, or the camera lagged: look again
                 self.pointer.send("L0")
-                self.state, self.wait = "off", now + LASER_SETTLE_SECS
+                self.state, self.wait = "off", now + LASER_SETTLE_SECS + self.lag
             else:
                 self._hold(now, "can't see the dot, so pointing by calibration alone")
             return

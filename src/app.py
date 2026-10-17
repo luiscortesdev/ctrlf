@@ -71,10 +71,14 @@ from src.vision.camera import open_camera, reconnect_camera
 from src.vision.detector import CUTOFF_MARGIN, PICTURE_MATCH
 
 # ------------------------------------------------------------------ settings
-CAMERA = 1                 # 1 = the iPhone (Continuity Camera, wireless), 0 = Mac's built-in
-# A Wi-Fi camera works too: put its stream address here instead, e.g. for a Tapo (set a
-# "Camera Account" in the Tapo app: Advanced Settings):
-#   CAMERA = "rtsp://USER:PASSWORD@192.168.1.50:554/stream1"
+# The Tapo Wi-Fi camera (TCW61) on the iPhone hotspot. Its login is the "Camera Account"
+# from the Tapo app (Advanced Settings), kept in .env as CAMERA_USER and CAMERA_PASSWORD.
+# If the hotspot gives it another address, the app finds it there. 1 = the iPhone
+# (Continuity Camera), 0 = the Mac's built-in.
+CAMERA = "rtsp://172.20.10.5:554/stream1"
+# How far a Wi-Fi camera's picture runs behind; the laser waits this much longer before
+# trusting a frame. A guess: measure it once the laser is here.
+CAMERA_LAG_SECS = 0.8
 MIRROR_LEFT_RIGHT = False  # True if the camera faces you, so "left" means YOUR left
 DETECTOR = "owl"           # "owl" finds keys and earbuds; "yolo" is faster but misses them
 # Detector input size: 960 is OWLv2's native size; 768 is 1.7x faster for about the same
@@ -1462,7 +1466,7 @@ def main():
     # The detector reports a bit below each threshold, so the tracker can keep following
     # things whose score dips for a moment.
     detector = BackgroundDetector(model, keep_level, load_area(), TILES, TILE_SIZE)
-    cap = open_camera(CAMERA)
+    cap = open_camera(CAMERA, CAMERA_LAG_SECS)
 
     from src.vision.laser_tracker import Aimer, Calibration, RoughMap
 
@@ -1481,7 +1485,8 @@ def main():
         phone = Phone(lambda: questions.put("left home"))
         print(f'(Phone alerts: ntfy topic {phone.topic}. Type "phone" for the setup.)')
     app = App(Memory(), pointer, Aimer(pointer, calib or RoughMap(PAN_CENTER, PAN_SPAN,
-                                                                   TILT_CENTER, TILT_SPAN)),
+                                                                   TILT_CENTER, TILT_SPAN),
+                                       open_camera.lag),
               detector, phone)
     pointer.ring("W")  # the privacy light: the camera is on
     threading.Thread(target=read_questions, args=(questions,), daemon=True).start()
