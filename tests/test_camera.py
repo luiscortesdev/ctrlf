@@ -1,8 +1,11 @@
 """Tests for the Wi-Fi camera code (src/vision/camera.py) and the laser's wait for a lagging
 camera. No camera needed: the stream and the network are stand-ins."""
 
+import os
 import socket
 import time
+
+import pytest
 
 from src.vision import camera, laser_tracker
 
@@ -89,7 +92,7 @@ def test_open_camera_lag_only_for_streams(monkeypatch):
     monkeypatch.setattr(camera, "capture", lambda source: _FakeCapture(1))
     camera.open_camera("rtsp://172.20.10.5:554/stream1", 0.8)
     assert camera.open_camera.lag == 0.8
-    monkeypatch.setattr(camera.cv2, "VideoCapture", lambda index: _FakeCapture(1))
+    monkeypatch.setattr(camera.cv2, "VideoCapture", lambda index, *backend: _FakeCapture(1))
     camera.open_camera(1, 0.8)
     assert camera.open_camera.lag == 0.0
 
@@ -121,3 +124,73 @@ def test_aimer_waits_for_camera_lag():
     aimer.update("laser-off frame", arrived)
     assert aimer.state == "on"
     assert abs(aimer.wait - (arrived + laser_tracker.LASER_SETTLE_SECS + 0.8)) < 1e-9
+
+
+def test_choose_camera():
+    wifi = "rtsp://172.20.10.5:554/stream1"
+    assert camera.choose_camera(None, wifi, 0) == wifi
+    assert camera.choose_camera("WiFi", wifi, 0) == wifi
+    assert camera.choose_camera("webcam", wifi, 1) == 1
+    assert camera.choose_camera(" 2 ", wifi, 0) == 2
+    assert camera.choose_camera("rtsp://10.0.0.9/live", wifi, 0) == "rtsp://10.0.0.9/live"
+    with pytest.raises(ValueError):
+        camera.choose_camera("usb", wifi, 0)
+
+
+def test_webcam_has_its_own_calibration_and_desk_area():
+    path = os.path.join("data", "calibration.json")
+    assert camera.per_camera(path, "rtsp://172.20.10.5:554/stream1") == path
+    assert camera.per_camera(path, 0) == os.path.join("data", "calibration-webcam.json")
+
+
+def test_camera_option(monkeypatch, capsys):
+    from src import app
+
+    monkeypatch.delenv("CTRLF_CAMERA", raising=False)
+    monkeypatch.setattr(app, "AREA_PATH", app.AREA_PATH)
+    assert app.camera_option([]) == app.CAMERA
+    assert app.AREA_PATH.endswith("desk_area.json")
+    assert app.camera_option(["--camera", "webcam"]) == app.WEBCAM
+    assert app.AREA_PATH.endswith("desk_area-webcam.json")
+    monkeypatch.setenv("CTRLF_CAMERA", "3")
+    assert app.camera_option([]) == 3
+    assert app.camera_option(["--camera", "wifi"]) == app.CAMERA  # the flag wins
+    with pytest.raises(SystemExit):
+        app.camera_option(["--camera", "usb"])
+    monkeypatch.setattr(app, "list_cameras", lambda: [(0, (1280, 720)), (1, (1920, 1080))])
+    with pytest.raises(SystemExit) as stop:
+        app.camera_option(["--list-cameras"])
+    assert stop.value.code == 0 and "--camera 1    1920x1080" in capsys.readouterr().out
+
+
+def test_room_camera_falls_back_only_when_not_asked_for(monkeypatch):
+    from src import app
+
+    opened = []
+
+    def fake_open(source, lag=0.0):
+        opened.append(source)
+        if isinstance(source, str):
+            raise SystemExit("Can't reach the camera.")
+        fake_open.source = source  # like open_camera.source
+        return _FakeCapture(1)
+    monkeypatch.delenv("CTRLF_CAMERA", raising=False)
+    monkeypatch.setattr(app, "open_camera", fake_open)
+    monkeypatch.setattr(app, "AREA_PATH", app.AREA_PATH)
+
+    app.open_room_camera(app.camera_option([]))  # the default: falls back to the webcam
+    assert opened == [app.CAMERA, app.WEBCAM] and fake_open.source == app.WEBCAM
+    assert app.AREA_PATH.endswith("desk_area-webcam.json")
+
+    with pytest.raises(SystemExit):  # asked for the Wi-Fi camera: no fallback
+        app.open_room_camera(app.camera_option(["--camera", "wifi"]))
+
+
+def test_nothing_to_type_in_doesnt_quit(monkeypatch):
+    from src import app
+
+    monkeypatch.setattr(app.time, "sleep", lambda s: None)
+    monkeypatch.setattr("builtins.input", lambda prompt="": (_ for _ in ()).throw(EOFError))
+    q = app.queue.Queue()
+    app.read_questions(q)
+    assert q.empty()

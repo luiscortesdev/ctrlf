@@ -1,4 +1,6 @@
-# Mac prototype (Apple Silicon). Use Python 3.11; 3.14 is too new for torch/CLIP.
+# Mac (Apple Silicon) and Windows. Use Python 3.11; 3.14 is too new for torch/CLIP.
+# Windows with an NVIDIA or Intel GPU: install torch from its own index first
+# (python scripts/bench_platform.py says which), or it runs on the CPU.
 # Versions in comments are the ones it was tested with on Oct 16.
 ultralytics      # 8.4.178  YOLO-World fallback detector; also installs torch, torchvision
 opencv-python    # 5.0.0.93
@@ -6,7 +8,9 @@ transformers     # 5.20.1   OWLv2, the main detector
 torch            # 2.14.1
 numpy            # 2.4.6
 pyserial         # 3.5      ESP32 link
-mlx-whisper      # 0.4.3    voice input (Apple Silicon only)
+mlx-whisper ; sys_platform == "darwin"     # 0.4.3   voice input on the Mac
+faster-whisper ; sys_platform != "darwin"  # 1.2.1   voice input elsewhere
+comtypes ; sys_platform == "win32"         # 1.4.17  the Windows voices (src/tts.py)
 sounddevice      # 0.5.6    microphone and Gemini's voice
 google-genai     # 2.31.0   Gemini: understands questions, speaks answers (key in .env)
 requests         # 2.34.2   phone alerts through ntfy.sh
