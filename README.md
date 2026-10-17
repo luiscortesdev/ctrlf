@@ -44,6 +44,8 @@ drives the servos and the laser.
 | `web/` | The website: 3D intro + dashboard (plain HTML/CSS/JS, works offline) |
 | `scripts/camera_test.py` | Live view with boxes, for tuning thresholds |
 | `scripts/calibrate.py` | Laser calibration sweep (writes `data/calibration.json`) |
+| `scripts/measure_lag.py` | Times how far the Wi-Fi camera runs behind, with the LED ring (for `CAMERA_LAG_SECS`) |
+| `scripts/preflight.py` | Checks the network, camera, ESP32, Gemini, models, audio and calibration before a demo |
 | `firmware/esp32_controller/` | ESP32-S3 firmware: smooth servo glides, anti-backlash, laser auto-off, Wi-Fi, LED ring |
 | `data/` | What it remembers and learns. Not in git: it's photos of your room |
 

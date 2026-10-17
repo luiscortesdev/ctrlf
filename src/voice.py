@@ -310,6 +310,8 @@ class Speaker:
         tts.stop()
 
     def _run(self):
+        from src import gemini
+
         while True:
             turn, text = self.queue.get()
             if turn != self.turn:
