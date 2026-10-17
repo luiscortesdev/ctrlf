@@ -28,6 +28,7 @@ class Track:
     def __init__(self, label, score, box, now):
         self.label, self.score = label, score
         self.box = [float(v) for v in box]
+        self.last = tuple(box)  # the latest sighting itself, which the smoothed box lags
         self.hits, self.misses = 1, 0
         self.strong = 1  # sightings at its full threshold
         self.first, self.seen = now, now
@@ -58,6 +59,7 @@ class Track:
         self.hits += 1
         self.strong += strong
         self.misses = 0
+        self.last = tuple(box)
         self.seen, self.fresh = now, True
 
 
@@ -70,9 +72,13 @@ def _overlap(a, b):
 
 
 def _same_thing(track, box):
-    """Is this box probably the object the track follows?"""
+    """Is this box probably the object the track follows? Checked against its latest
+    sighting too: while it's being carried, the smoothed box falls behind, and without
+    this every other sighting would start a new track."""
     c = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
-    return _overlap(track.box, box) > 0.3 or math.dist(c, track.center) < 0.5 * track.size
+    last = ((track.last[0] + track.last[2]) / 2, (track.last[1] + track.last[3]) / 2)
+    return (_overlap(track.box, box) > 0.3 or math.dist(c, track.center) < 0.5 * track.size
+            or math.dist(c, last) < 0.5 * track.size)
 
 
 class Tracker:
