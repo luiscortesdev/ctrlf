@@ -1,0 +1,115 @@
+html, body { height: 100%; overflow: hidden; background: var(--bg); }
+
+#scene {
+  position: fixed; inset: 0; width: 100vw; height: 100vh; display: block;
+  opacity: 0;
+}
+
+.intro-ui { position: fixed; inset: 0; pointer-events: none; }
+
+/* Thin laser rule that draws across the screen at the start */
+.rule {
+  position: absolute; left: 50%; top: calc(50% + clamp(36px, 6.4vw, 104px) * 0.85); height: 2px; width: 0;
+  transform: translate(-50%, -50%);
+  background: var(--laser);
+  box-shadow: 0 0 14px 2px rgba(255, 46, 46, 0.7);
+}
+
+/* Story lines: big editorial type, lower left */
+.line {
+  position: absolute; left: 7vw; bottom: 14vh; margin: 0;
+  white-space: nowrap; /* always one line; intro.js shrinks it to fit */
+  font-family: var(--font-display); font-weight: 700;
+  font-size: clamp(36px, 6.4vw, 104px); line-height: 1.02; letter-spacing: -0.035em;
+  color: var(--text);
+}
+/* Opening line: centered, lighter weight so the highlighted word pops */
+.line.center {
+  left: 50%; top: 50%; bottom: auto; transform: translate(-50%, -50%);
+  max-width: none; white-space: nowrap; text-align: center; font-weight: 500;
+}
+.line .hl {
+  display: inline-block; font-style: normal; font-weight: 700;
+  color: var(--laser-text); transform: skewX(-12deg); padding-right: 0.06em;
+  background: var(--laser-grad-text); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+}
+
+.line .w { display: inline-block; opacity: 0; transform: translateY(0.35em); }
+.line em { font-style: normal; color: var(--laser-text); }
+
+/* The spoken question */
+.query {
+  position: absolute; right: 7vw; top: 18vh;
+  display: flex; align-items: center; gap: 14px;
+  padding: 18px 26px; border-radius: 999px;
+  background: rgba(18, 24, 39, 0.82); backdrop-filter: blur(10px);
+  border: 1px solid var(--line);
+  font-size: clamp(18px, 2vw, 28px); color: var(--text);
+  opacity: 0;
+}
+.query-mark {
+  width: 12px; height: 12px; border-radius: 50%; background: var(--laser);
+  box-shadow: 0 0 0 5px var(--laser-soft);
+  animation: q-pulse 1s ease-in-out infinite;
+}
+@keyframes q-pulse { 50% { box-shadow: 0 0 0 10px rgba(255, 46, 46, 0.05); } }
+
+/* Final title */
+.title {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; text-align: center; opacity: 0;
+}
+.title h1 {
+  will-change: transform;
+  margin: 0; font-family: var(--font-display); font-weight: 700;
+  font-size: clamp(72px, 15vw, 240px); letter-spacing: -0.05em; line-height: 0.9;
+}
+.title-sub {
+  margin: 10px 0 0; font-family: var(--font-display); font-weight: 500;
+  font-size: clamp(20px, 2.6vw, 40px); color: var(--text-2); letter-spacing: -0.02em;
+}
+.title-tag {
+  margin: 28px 0 0; font-size: clamp(16px, 1.4vw, 20px); color: var(--text-3);
+  font-family: var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase;
+}
+
+/* Labels pinned to 3D objects */
+.labels { position: absolute; inset: 0; }
+.tag {
+  position: absolute; transform: translate(-50%, -100%);
+  padding: 5px 10px; border-radius: 6px; white-space: nowrap;
+  background: rgba(11, 15, 25, 0.8); border: 1px solid var(--line);
+  font-family: var(--font-mono); font-size: 13px; color: var(--text-2);
+  opacity: 0;
+}
+.tag b { color: var(--text); font-weight: 500; }
+.tag.hot { border-color: var(--laser); color: var(--laser-text); }
+.tag.hot b { color: var(--laser-text); }
+
+/* Skip + mute */
+.intro-controls {
+  position: fixed; right: 24px; bottom: 24px; display: flex; gap: 8px; z-index: 5;
+}
+.intro-controls .icon-btn { background: rgba(11, 15, 25, 0.6); backdrop-filter: blur(6px); }
+
+/* Fallback start screen when the browser blocks autoplay audio */
+.start {
+  position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center;
+  background: var(--bg);
+}
+.start button {
+  display: inline-flex; align-items: center; gap: 14px;
+  min-height: 64px; padding: 0 34px; border-radius: 999px;
+  border: 1px solid var(--line); background: transparent; color: var(--text);
+  font-family: var(--font-display); font-weight: 500; font-size: 20px; letter-spacing: 0.02em;
+}
+.start button:hover { border-color: var(--text-3); }
+.start-dot {
+  width: 12px; height: 12px; border-radius: 50%; background: var(--laser);
+  box-shadow: 0 0 18px 3px rgba(255, 46, 46, 0.7);
+}
+
+.fade { position: fixed; inset: 0; background: var(--bg); opacity: 0; pointer-events: none; z-index: 20; }
+
+/* White that fills the screen after zooming into the "+" */
+.flash { position: fixed; inset: 0; background: #E2E8F0; opacity: 0; pointer-events: none; z-index: 21; }

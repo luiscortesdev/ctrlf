@@ -40,6 +40,8 @@ drives the servos and the laser.
 | `src/voice.py` | Push-to-talk (Gemini, with mlx-whisper as the fallback) and speaking the answers |
 | `src/gemini.py` | Gemini: understands the spoken question, speaks the answer |
 | `src/phone.py` | Phone alerts through ntfy.sh when you leave home without something |
+| `src/web.py` | The website's link to the app: serves `web/`, the live view and `/api/*` |
+| `web/` | The website: 3D intro + dashboard (plain HTML/CSS/JS, works offline) |
 | `scripts/camera_test.py` | Live view with boxes, for tuning thresholds |
 | `scripts/calibrate.py` | Laser calibration sweep (writes `data/calibration.json`) |
 | `firmware/esp32_controller/` | ESP32-S3 firmware: smooth servo glides, anti-backlash, laser auto-off |
@@ -67,6 +69,11 @@ both the first time):
 source venv/bin/activate
 python scripts/ctrlf.py
 ```
+
+The website starts with it: open **http://localhost:8000** for the intro, then the
+dashboard (live view, ask box, last seen, tracking, teaching). It's the `web/` folder,
+served by `src/web.py` from the same Python process, so there's nothing else to run.
+Use `CTRLF_WEB_PORT=8001` if port 8000 is busy. See `web/README.md` and `web/API.md`.
 
 Camera: the iPhone through Continuity Camera is the default (`CAMERA = 1` in
 `src/app.py`); it falls back to the Mac's camera. In the video window: SPACE = ask out

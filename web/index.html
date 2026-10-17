@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ctrl+F for Your Room</title>
+  <script>
+    // Play the intro once. Later visits go straight to the dashboard,
+    // unless the URL has ?replay.
+    try {
+      if (localStorage.getItem("ctrlf-intro-seen") === "1" && !location.search.includes("replay")) {
+        location.replace("dashboard.html");
+      }
+    } catch (e) {}
+  </script>
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/intro.css">
+  <script type="importmap">{ "imports": { "three": "./vendor/three.module.js" } }</script>
+  <script src="vendor/gsap.min.js"></script>
+</head>
+<body>
+  <canvas id="scene" aria-hidden="true"></canvas>
+
+  <div class="intro-ui">
+    <div class="rule" id="rule"></div>
+    <p class="line" id="line" aria-live="polite"></p>
+    <div class="query" id="query"><span class="query-mark" aria-hidden="true"></span><span id="query-text"></span></div>
+    <div class="title" id="title">
+      <h1>Ctrl<span id="zoom-plus">+</span>F</h1>
+      <p class="title-sub">for your room</p>
+      <p class="title-tag">Find anything you've set down.</p>
+    </div>
+    <div class="labels" id="labels"></div>
+  </div>
+
+  <div class="intro-controls">
+    <button class="icon-btn" id="mute" type="button" aria-pressed="false">Sound on</button>
+    <button class="icon-btn" id="skip" type="button">Skip intro</button>
+  </div>
+
+  <div class="start" id="start" hidden>
+    <button type="button" id="start-btn">
+      <span class="start-dot" aria-hidden="true"></span>
+      Begin
+    </button>
+  </div>
+
+  <div class="fade" id="fade"></div>
+  <div class="flash" id="flash"></div>
+
+  <script type="module" src="js/intro.js"></script>
+</body>
+</html>

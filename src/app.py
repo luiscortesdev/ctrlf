@@ -561,9 +561,11 @@ def answer(label, obj, visible, mem, now):
 SPEAKER = None  # voice.Speaker once the app is running
 CONVERSATION = collections.deque(maxlen=8)  # (time, "Person: ..." / "Device: ...") for Gemini
 CONVERSATION_SECS = 120  # older lines are old news
+SAID = collections.deque(maxlen=50)  # (time, text) of everything said, for the website
 
 
 def say(text):
+    SAID.append((time.time(), text))
     print(f"\n>> {text}")
     CONVERSATION.append((time.time(), f"Device: {text}"))
     if SPEAKER:
@@ -1411,6 +1413,14 @@ def main():
             print("\n(Gemini: ready)" if problem is None else
                   f"\n(Gemini not working: {problem}. Whisper and the Mac's voice fill in.)")
         threading.Thread(target=check_gemini, daemon=True).start()
+
+    # The website (web/): http://localhost:8000. See src/web.py.
+    from src.web import WebBridge
+    web = WebBridge(ROOT, SNAP_DIR, TAUGHT_DIR)
+    if not web.start():
+        web = None
+    web_helpers = {"describe": describe, "surfaces": SURFACES, "objects": OBJECTS, "taught": TAUGHT}
+
     voice = None
     if VOICE:
         try:
@@ -1521,8 +1531,22 @@ def main():
             print(f"\n(detector error: {detector.error!r})")
             reported_error = True
 
+        if web:  # from the website: questions/commands, and push-to-talk
+            for kind, text in web.take_actions():
+                if kind == "command":
+                    print(f'\n(website: "{text}")')
+                    questions.put(text)
+                elif kind == "listen" and voice:  # like SPACE
+                    if SPEAKER:
+                        SPEAKER.stop()
+                    voice.toggle()
+                elif kind == "click" and app.teach and app.teach["phase"] not in ("naming", "first name"):
+                    app.click_teach((text[0] * frame.shape[1], text[1] * frame.shape[0]), now)
         while not questions.empty():
-            if not app.command(questions.get(), now):
+            text = questions.get()
+            if web:
+                web.note_command(text, now)
+            if not app.command(text, now):
                 running = False
         # Teaching with the laptop camera: open it only while it's needed.
         want_laptop = bool(app.teach and app.teach["laptop"] and app.teach["phase"] == "looking")
@@ -1539,6 +1563,7 @@ def main():
             teach_cap.release()
             teach_cap = None
             cv2.destroyWindow(TEACH_WINDOW)
+        laptop_view = None
         if teach_cap is not None:
             ok_t, laptop_frame = teach_cap.read()
             if ok_t:
@@ -1558,6 +1583,10 @@ def main():
         s = DISPLAY_W / frame.shape[1]
         view = cv2.resize(frame, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
         draw_tracks(view, app.tracker, s, glide)
+        if web:  # the website gets the boxes and teaching prompts, without the window's panels
+            web_view = view.copy()
+            draw_teaching(web_view, app, detector, s, now)
+            web.tick(app, web_view, laptop_view, voice, detector, SAID, now, web_helpers)
         draw_overlay(view, app, now)
         draw_teaching(view, app, detector, s, now)
         if detector.secs_per_frame:

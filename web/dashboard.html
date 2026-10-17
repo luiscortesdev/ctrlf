@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ctrl+F for Your Room</title>
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/dashboard.css">
+</head>
+<body>
+  <script>
+    // Coming straight from the intro? Start covered in white (see dashboard.js).
+    try { if (sessionStorage.getItem("ctrlf-arrive") === "1") document.body.classList.add("arriving"); } catch (e) {}
+  </script>
+  <div class="arrive" id="arrive" aria-hidden="true"></div>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">Ctrl+F <span class="brand-thin">for your room</span></span>
+      </div>
+      <div class="topbar-right">
+        <span class="conn" id="conn"><span class="conn-dot"></span><span id="conn-text">Connecting…</span></span>
+        <a class="icon-btn" href="index.html?replay">Replay intro</a>
+        <button class="icon-btn" id="mute" type="button" aria-pressed="false">Sound on</button>
+      </div>
+    </header>
+
+    <main class="grid">
+      <section class="col-main">
+        <div class="feed" id="feed">
+          <img id="feed-img" alt="Live camera feed with detected objects" hidden>
+          <video id="feed-video" autoplay muted playsinline hidden></video>
+          <div class="feed-empty" id="feed-empty">
+            <span class="mono">NO CAMERA SIGNAL</span>
+          </div>
+          <svg class="feed-overlay" id="overlay" viewBox="0 0 1000 562.5" preserveAspectRatio="none" aria-hidden="true">
+            <line id="beam" x1="0" y1="562.5" x2="0" y2="562.5"></line>
+            <g id="reticle" opacity="0">
+              <rect id="ret-box" x="0" y="0" width="0" height="0"></rect>
+              <circle id="ret-dot" cx="0" cy="0" r="7"></circle>
+            </g>
+          </svg>
+          <div class="feed-tag mono" id="feed-tag">LIVE</div>
+          <div class="feed-laser" id="feed-laser" hidden><span></span>LASER ON</div>
+        </div>
+
+        <form class="ask" id="ask-form" autocomplete="off">
+          <label for="ask-input" class="ask-label">Ask about anything you've set down</label>
+          <div class="ask-row">
+            <input id="ask-input" type="text" placeholder="Where are my keys?">
+            <button type="button" class="ask-mic" id="ask-mic" aria-label="Ask out loud (push to talk)">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+            </button>
+            <button type="submit" class="ask-go">Find it</button>
+          </div>
+        </form>
+
+        <section class="card tracking" aria-labelledby="tracking-h">
+          <div class="card-head">
+            <h2 id="tracking-h">Tracking</h2>
+            <span class="card-meta" id="tracking-count"></span>
+          </div>
+          <button type="button" class="teach-open" id="teach-open">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="3"/></svg>
+            <span><b>Teach by showing</b><small>Hold up any object to the laptop camera and it learns it</small></span>
+          </button>
+          <p class="card-sub">Turn items on or off, or teach it something new. It starts looking right away.</p>
+          <div class="chips" id="chips"></div>
+          <form class="track-add" id="track-form" autocomplete="off">
+            <label for="track-input" class="visually-hidden">Track something new</label>
+            <input id="track-input" type="text" placeholder="Something new? Type its name, e.g. retainer case">
+            <button type="submit" class="icon-btn">Add</button>
+          </form>
+          <div class="suggest" id="suggest"></div>
+        </section>
+      </section>
+
+      <aside class="col-side">
+        <section class="card status" id="status" data-state="IDLE" aria-live="polite">
+          <div class="card-head"><h2>Status</h2><span class="card-meta mono" id="status-clock"></span></div>
+          <div class="status-headline" id="status-headline">Watching the room</div>
+          <div class="status-msg" id="status-msg">Ask where something is.</div>
+          <ol class="steps" id="steps">
+            <li data-step="heard">Heard</li>
+            <li data-step="found">Found</li>
+            <li data-step="aiming">Aiming</li>
+            <li data-step="done">Done</li>
+          </ol>
+        </section>
+
+        <section class="card lastseen" aria-labelledby="lastseen-h">
+          <div class="card-head"><h2 id="lastseen-h">Last seen</h2><span class="card-meta" id="lastseen-count"></span></div>
+          <ul class="items" id="items"></ul>
+        </section>
+
+        <section class="card activity" aria-labelledby="activity-h">
+          <div class="card-head"><h2 id="activity-h">Activity</h2></div>
+          <ol class="log mono" id="log"></ol>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <dialog class="teach" id="teach" aria-labelledby="teach-h">
+    <div class="teach-inner">
+      <div class="teach-head">
+        <h2 id="teach-h">Teach a new object</h2>
+        <button type="button" class="icon-btn" id="teach-close">Close</button>
+      </div>
+
+      <!-- Live: the app runs the teaching (its laptop camera, its questions). -->
+      <div class="teach-live" id="teach-live" hidden>
+        <div class="teach-cam teach-live-cam">
+          <img id="teach-live-img" alt="What the app's camera sees while teaching">
+          <p class="teach-live-hint" id="teach-live-hint">Click the object in the picture if it picked the wrong one.</p>
+        </div>
+        <div class="teach-side">
+          <p class="teach-live-say" id="teach-live-say" aria-live="polite">Starting…</p>
+          <form class="teach-live-name" id="teach-live-form" autocomplete="off">
+            <label class="teach-label" for="teach-live-name">What is it?</label>
+            <div class="teach-actions">
+              <input id="teach-live-name" type="text" placeholder="e.g. retainer case">
+              <button type="submit" class="icon-btn">Send</button>
+            </div>
+          </form>
+          <div class="teach-actions" id="teach-live-yesno" hidden>
+            <button type="button" class="ask-go" id="teach-yes">Yes, that's it</button>
+            <button type="button" class="icon-btn" id="teach-no">No</button>
+          </div>
+          <ol class="teach-steps">
+            <li>Hold it up to the laptop camera and turn it a little.</li>
+            <li>Then show it to the room camera, or put it down and step back.</li>
+            <li>Answer "is this it?" with Yes or No.</li>
+          </ol>
+          <div class="teach-actions">
+            <button type="button" class="icon-btn" id="teach-cancel">Cancel teaching</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="teach-body" id="teach-mock">
+        <div class="teach-cam">
+          <video id="teach-video" autoplay muted playsinline></video>
+          <div class="teach-guide" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+          <div class="teach-count" id="teach-count" aria-live="assertive"></div>
+          <div class="teach-nocam" id="teach-nocam" hidden>No camera found. Check that the laptop webcam is allowed.</div>
+        </div>
+
+        <div class="teach-side">
+          <label class="teach-label" for="teach-cam-select">Camera</label>
+          <select id="teach-cam-select"></select>
+
+          <label class="teach-label" for="teach-name">What is it?</label>
+          <input id="teach-name" type="text" placeholder="e.g. retainer case" autocomplete="off">
+
+          <ol class="teach-steps">
+            <li>Hold the object inside the box.</li>
+            <li>Press <b>Capture</b>, then slowly turn it so the camera sees every side.</li>
+            <li>Name it and save.</li>
+          </ol>
+
+          <div class="teach-shots" id="teach-shots"></div>
+
+          <div class="teach-actions">
+            <button type="button" class="icon-btn" id="teach-capture">Capture</button>
+            <button type="button" class="ask-go" id="teach-save" disabled>Save to memory</button>
+          </div>
+          <p class="teach-msg" id="teach-msg" aria-live="polite"></p>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <script type="module" src="js/dashboard.js"></script>
+</body>
+</html>
