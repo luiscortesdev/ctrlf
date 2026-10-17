@@ -8,4 +8,8 @@
 .pio/
 .pytest_cache/
 __pycache__/
-*.pyc
+*.pyc
+# What the app remembers and learns: photos of your room and things. Never commit it.
+data/
+venv/
+view_*.jpg

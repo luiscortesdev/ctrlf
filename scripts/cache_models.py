@@ -1,10 +1,8 @@
-from ultralytics import YOLO
-from faster_whisper import WhisperModel
+"""Download the models once (OWLv2 ~620 MB, Whisper small.en ~480 MB), so the app works
+offline afterwards: python scripts/cache_models.py"""
 
-print("1/2: Downloading YOLO-World weights...")
-YOLO("yolov8s-worldv2.pt")
+from huggingface_hub import snapshot_download
 
-print("2/2: Downloading Faster-Whisper base.en weights...")
-WhisperModel("base.en", device="cpu", compute_type="int8")
-
-print("\nDone! All core models are cached locally.")
+for name in ("google/owlv2-base-patch16-ensemble", "mlx-community/whisper-small.en-mlx"):
+    print("caching", name)
+    snapshot_download(name)
