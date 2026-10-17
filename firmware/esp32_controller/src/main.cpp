@@ -45,7 +45,8 @@
 //                tilt servo signal -> GPIO 5
 //   Common GND:  an ESP32 GND pin -> GND rail (required, or the servos jitter/ignore commands)
 //   Laser:       check the laser's current in its listing.
-//                <= 20 mA: laser + -> GPIO 6, laser - -> GND.
+//                <= 20 mA: laser + -> GPIO 6, laser - -> GND (GPIO 6 is set to its
+//                strongest drive, up to 40 mA; an HW-493 / KY-008 is fine on it, if dim).
 //                more than that: switch it with a transistor (2N2222 or similar):
 //                GPIO 6 -> 1k resistor -> base, emitter -> GND,
 //                collector -> laser -, laser + -> 3.3V or 5V (whatever the laser is rated for).
@@ -66,6 +67,7 @@
 #include <ESPmDNS.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include "driver/gpio.h"
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -550,6 +552,7 @@ void drawRing() {
 void setup() {
   Serial.begin(115200);
   pinMode(LASER_PIN, OUTPUT);
+  gpio_set_drive_capability((gpio_num_t)LASER_PIN, GPIO_DRIVE_CAP_3);  // strongest (up to 40 mA): a brighter dot on 3.3 V
   digitalWrite(LASER_PIN, LOW);
   ledcAttach(PAN_PIN, SERVO_HZ, SERVO_BITS);
   ledcAttach(TILT_PIN, SERVO_HZ, SERVO_BITS);
