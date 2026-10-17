@@ -19,17 +19,17 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); }
 .line {
   position: absolute; left: 7vw; bottom: 14vh; margin: 0;
   white-space: nowrap; /* always one line; intro.js shrinks it to fit */
-  font-family: var(--font-display); font-weight: 700;
-  font-size: clamp(36px, 6.4vw, 104px); line-height: 1.02; letter-spacing: -0.035em;
+  font-family: var(--font-display); font-weight: 750; font-stretch: 108%;
+  font-size: clamp(36px, 6.2vw, 100px); line-height: 1.02; letter-spacing: -0.03em;
   color: var(--text);
 }
 /* Opening line: centered, lighter weight so the highlighted word pops */
 .line.center {
   left: 50%; top: 50%; bottom: auto; transform: translate(-50%, -50%);
-  max-width: none; white-space: nowrap; text-align: center; font-weight: 500;
+  max-width: none; white-space: nowrap; text-align: center; font-weight: 400;
 }
 .line .hl {
-  display: inline-block; font-style: normal; font-weight: 700;
+  display: inline-block; font-style: normal; font-weight: 800;
   color: var(--laser-text); transform: skewX(-12deg); padding-right: 0.06em;
   background: var(--laser-grad-text); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
 }
@@ -54,23 +54,23 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); }
 }
 @keyframes q-pulse { 50% { box-shadow: 0 0 0 10px rgba(255, 46, 46, 0.05); } }
 
-/* Final title */
+/* Final title: the wherewolf lockup */
 .title {
   position: absolute; inset: 0; display: flex; flex-direction: column;
   align-items: center; justify-content: center; text-align: center; opacity: 0;
 }
-.title h1 {
-  will-change: transform;
-  margin: 0; font-family: var(--font-display); font-weight: 700;
-  font-size: clamp(72px, 15vw, 240px); letter-spacing: -0.05em; line-height: 0.9;
-}
+.title-mark { height: clamp(80px, 11vw, 170px); margin-bottom: clamp(18px, 2.4vw, 36px); }
+.title-mark .ww-mark { height: 100%; }
+.title-mark .ww-eye-red { filter: drop-shadow(0 0 16px rgba(255, 46, 46, 0.7)); }
+.title-word { margin: 0; width: min(64vw, 980px); will-change: transform; }
+.title-word .ww-word { width: 100%; height: auto; }
 .title-sub {
-  margin: 10px 0 0; font-family: var(--font-display); font-weight: 500;
-  font-size: clamp(20px, 2.6vw, 40px); color: var(--text-2); letter-spacing: -0.02em;
+  margin: clamp(16px, 2vw, 28px) 0 0; font-family: var(--font-display); font-weight: 600; font-stretch: 112%;
+  font-size: clamp(18px, 2.1vw, 32px); color: var(--text-2); letter-spacing: 0.01em;
 }
 .title-tag {
-  margin: 28px 0 0; font-size: clamp(16px, 1.4vw, 20px); color: var(--text-3);
-  font-family: var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase;
+  margin: 22px 0 0; font-size: clamp(13px, 1.1vw, 16px); color: var(--text-3);
+  font-family: var(--font-mono); letter-spacing: 0.14em; text-transform: uppercase;
 }
 
 /* Labels pinned to 3D objects */
@@ -94,16 +94,14 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); }
 
 /* Fallback start screen when the browser blocks autoplay audio */
 .start {
-  position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center;
-  background: var(--bg);
+  position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column; gap: 44px;
+  align-items: center; justify-content: center; background: var(--bg);
 }
+.start-brand { font-size: clamp(34px, 4.4vw, 64px); }
 .start button {
   display: inline-flex; align-items: center; gap: 14px;
-  min-height: 64px; padding: 0 34px; border-radius: 999px;
-  border: 1px solid var(--line); background: transparent; color: var(--text);
-  font-family: var(--font-display); font-weight: 500; font-size: 20px; letter-spacing: 0.02em;
+  min-height: 60px; padding: 0 34px; border-radius: 12px; font-size: 16px;
 }
-.start button:hover { border-color: var(--text-3); }
 .start-dot {
   width: 12px; height: 12px; border-radius: 50%; background: var(--laser);
   box-shadow: 0 0 18px 3px rgba(255, 46, 46, 0.7);
@@ -111,5 +109,5 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); }
 
 .fade { position: fixed; inset: 0; background: var(--bg); opacity: 0; pointer-events: none; z-index: 20; }
 
-/* White that fills the screen after zooming into the "+" */
-.flash { position: fixed; inset: 0; background: #E2E8F0; opacity: 0; pointer-events: none; z-index: 21; }
+/* The red that fills the screen after diving into the period of "wherewolf." */
+.flash { position: fixed; inset: 0; background: var(--ember); opacity: 0; pointer-events: none; z-index: 21; }

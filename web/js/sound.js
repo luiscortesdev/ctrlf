@@ -7,12 +7,31 @@ let muted = false;
 
 try { muted = localStorage.getItem("ctrlf-muted") === "1"; } catch {}
 
+let room = null;   // shared reverb send: makes the short sounds feel like they're in a space
+let lastHover = 0;
+
 export function audio() {
   if (!ctx) {
     ctx = new (window.AudioContext || window.webkitAudioContext)();
     master = ctx.createGain();
     master.gain.value = muted ? 0 : 0.8;
-    master.connect(ctx.destination);
+    // A gentle limiter so stacked sounds never clip.
+    const limit = ctx.createDynamicsCompressor();
+    limit.threshold.value = -6; limit.knee.value = 6; limit.ratio.value = 8;
+    limit.attack.value = 0.002; limit.release.value = 0.12;
+    master.connect(limit).connect(ctx.destination);
+    // Reverb: a synthetic impulse (stereo noise with a fast exponential tail).
+    const conv = ctx.createConvolver();
+    const len = Math.floor(ctx.sampleRate * 1.6);
+    const ir = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = ir.getChannelData(ch);
+      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3.2);
+    }
+    conv.buffer = ir;
+    room = ctx.createGain();
+    room.gain.value = 0.22;
+    room.connect(conv).connect(master);
   }
   return ctx;
 }
@@ -226,4 +245,147 @@ export function lowTone() {
   o.connect(g).connect(master);
   o.start(t);
   o.stop(t + 0.65);
+}
+
+/* ---------- Interface sounds (sleek, short, a little flashy) ---------- */
+
+// Sends a node to the speakers dry, plus some of it into the reverb.
+function out(node, wet = 0.3, pan = 0) {
+  const c = audio();
+  let n = node;
+  if (pan && c.createStereoPanner) {
+    const p = c.createStereoPanner();
+    p.pan.value = pan;
+    n = n.connect(p);
+  }
+  n.connect(master);
+  if (wet) {
+    const w = c.createGain();
+    w.gain.value = wet;
+    n.connect(w).connect(room);
+  }
+}
+
+function partial(freq, t, peak, decay, type = "sine") {
+  const c = audio();
+  const o = c.createOscillator();
+  const g = c.createGain();
+  o.type = type;
+  o.frequency.value = freq;
+  env(g, t, 0.0015, peak, decay);
+  o.connect(g);
+  o.start(t);
+  o.stop(t + decay + 0.05);
+  return g;
+}
+
+// Hover: a tiny glassy tick. Throttled so sweeping across buttons doesn't rattle.
+export function hover() {
+  const c = audio();
+  if (c.state !== "running") return;
+  const now = performance.now();
+  if (now - lastHover < 45) return;
+  lastHover = now;
+  const t = c.currentTime;
+  const f = 3150 * (0.97 + Math.random() * 0.06);
+  out(partial(f, t, 0.03, 0.03), 0.12, (Math.random() - 0.5) * 0.3);
+  out(partial(f * 2.76, t, 0.012, 0.018), 0.1);
+}
+
+// Press: a crisp two-layer click (a bright transient over a short low body).
+export function press() {
+  const c = audio();
+  const t = c.currentTime;
+  const src = c.createBufferSource();
+  src.buffer = noiseBuffer(0.03);
+  const bp = c.createBiquadFilter();
+  bp.type = "bandpass"; bp.frequency.value = 4200; bp.Q.value = 1.2;
+  const g = c.createGain();
+  env(g, t, 0.0008, 0.22, 0.018);
+  src.connect(bp).connect(g);
+  out(g, 0.18);
+  src.start(t);
+  const o = c.createOscillator();
+  const og = c.createGain();
+  o.type = "sine";
+  o.frequency.setValueAtTime(190, t);
+  o.frequency.exponentialRampToValueAtTime(70, t + 0.06);
+  env(og, t, 0.002, 0.2, 0.07);
+  o.connect(og);
+  out(og, 0);
+  o.start(t);
+  o.stop(t + 0.1);
+}
+
+// Switch flipped: two quick tones, up for on and down for off.
+export function toggle(on = true) {
+  const c = audio();
+  const t = c.currentTime;
+  const [a, b] = on ? [1320, 1980] : [1760, 1175];
+  out(partial(a, t, 0.06, 0.06, "triangle"), 0.2);
+  out(partial(b, t + 0.045, 0.06, 0.09, "triangle"), 0.25);
+}
+
+// Swoosh: air moving across the stereo field. dir = "in" (opening) or "out".
+export function swoosh(dir = "in", duration = 0.42) {
+  const c = audio();
+  const t = c.currentTime;
+  const src = c.createBufferSource();
+  src.buffer = noiseBuffer(duration);
+  const bp = c.createBiquadFilter();
+  bp.type = "bandpass"; bp.Q.value = 2.2;
+  const [f0, f1] = dir === "in" ? [500, 5200] : [4200, 380];
+  bp.frequency.setValueAtTime(f0, t);
+  bp.frequency.exponentialRampToValueAtTime(f1, t + duration);
+  const g = c.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.32, t + duration * 0.55);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + duration);
+  src.connect(bp).connect(g);
+  if (c.createStereoPanner) {
+    const p = c.createStereoPanner();
+    p.pan.setValueAtTime(dir === "in" ? -0.6 : 0.6, t);
+    p.pan.linearRampToValueAtTime(dir === "in" ? 0.6 : -0.6, t + duration);
+    g.connect(p);
+    p.connect(master);
+    const w = c.createGain(); w.gain.value = 0.35; p.connect(w).connect(room);
+  } else out(g, 0.35);
+  src.start(t);
+}
+
+// The flashy one: a blade drawn from its sheath. A fast metallic scrape, then
+// a bright inharmonic ring that shimmers out. For "found it" and big reveals.
+export function shing(intensity = 1) {
+  const c = audio();
+  const t = c.currentTime;
+  const src = c.createBufferSource();
+  src.buffer = noiseBuffer(0.2);
+  const bp = c.createBiquadFilter();
+  bp.type = "bandpass"; bp.Q.value = 6;
+  bp.frequency.setValueAtTime(2500, t);
+  bp.frequency.exponentialRampToValueAtTime(9000, t + 0.14);
+  const sg = c.createGain();
+  sg.gain.setValueAtTime(0.0001, t);
+  sg.gain.exponentialRampToValueAtTime(0.18 * intensity, t + 0.1);
+  sg.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+  src.connect(bp).connect(sg);
+  out(sg, 0.4, -0.2);
+  src.start(t);
+  const hit = t + 0.12;
+  // Metal: partials that aren't whole multiples, each detuned a hair for shimmer.
+  [[2093, 0.07, 1.1], [3164, 0.05, 0.9], [4402, 0.04, 0.75], [5961, 0.03, 0.6], [7713, 0.02, 0.45]]
+    .forEach(([f, peak, decay], i) => {
+      out(partial(f, hit, peak * intensity, decay), 0.55, i % 2 ? 0.25 : -0.25);
+      out(partial(f * 1.004, hit, peak * 0.6 * intensity, decay * 0.9), 0.55, i % 2 ? -0.25 : 0.25);
+    });
+}
+
+// Text decoding (scrambled letters settling): a very soft data chatter.
+export function decode(length = 0.25) {
+  const c = audio();
+  if (c.state !== "running") return;
+  const t = c.currentTime;
+  for (let i = 0; i < 5; i++) {
+    out(partial(2400 + Math.random() * 2600, t + i * (length / 5), 0.012, 0.012, "square"), 0.05);
+  }
 }

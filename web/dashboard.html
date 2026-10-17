@@ -3,26 +3,27 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Ctrl+F for Your Room</title>
+  <title>wherewolf · Ctrl+F for your room</title>
+  <link rel="icon" href="img/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="css/base.css">
   <link rel="stylesheet" href="css/dashboard.css">
 </head>
 <body>
   <script>
-    // Coming straight from the intro? Start covered in white (see dashboard.js).
+    // Coming straight from the intro? Start covered in the logo's red (see dashboard.js).
     try { if (sessionStorage.getItem("ctrlf-arrive") === "1") document.body.classList.add("arriving"); } catch (e) {}
   </script>
   <div class="arrive" id="arrive" aria-hidden="true"></div>
   <div class="app">
     <header class="topbar">
-      <div class="brand">
-        <span class="brand-mark" aria-hidden="true"></span>
-        <span class="brand-name">Ctrl+F <span class="brand-thin">for your room</span></span>
+      <div class="brand fx-eyes">
+        <span class="brand-lockup" data-brand="lockup"></span>
+        <span class="brand-slogan">Ctrl+F for your room</span>
       </div>
       <div class="topbar-right">
         <span class="conn" id="conn"><span class="conn-dot"></span><span id="conn-text">Connecting…</span></span>
-        <a class="icon-btn" href="index.html?replay">Replay intro</a>
-        <button class="icon-btn" id="mute" type="button" aria-pressed="false">Sound on</button>
+        <a class="icon-btn fx-brackets" href="index.html?replay">Replay intro</a>
+        <button class="icon-btn fx-brackets" id="mute" type="button" aria-pressed="false">Sound on</button>
       </div>
     </header>
 
@@ -35,33 +36,39 @@
             <span class="mono">NO CAMERA SIGNAL</span>
           </div>
           <svg class="feed-overlay" id="overlay" viewBox="0 0 1000 562.5" preserveAspectRatio="none" aria-hidden="true">
+            <rect id="hover-box" x="0" y="0" width="0" height="0"></rect>
             <line id="beam" x1="0" y1="562.5" x2="0" y2="562.5"></line>
             <g id="reticle" opacity="0">
               <rect id="ret-box" x="0" y="0" width="0" height="0"></rect>
               <circle id="ret-dot" cx="0" cy="0" r="7"></circle>
             </g>
           </svg>
+          <div class="feed-hud" id="feed-hud" aria-hidden="true">
+            <span class="hud-x"></span><span class="hud-y"></span>
+            <span class="hud-read mono" id="hud-read"></span>
+          </div>
+          <div class="feed-pick mono" id="feed-pick" hidden></div>
           <div class="feed-tag mono" id="feed-tag">LIVE</div>
-          <div class="feed-laser" id="feed-laser" hidden><span></span>LASER ON</div>
+          <div class="feed-laser mono" id="feed-laser" hidden><span></span>LASER ON</div>
         </div>
 
         <form class="ask" id="ask-form" autocomplete="off">
           <label for="ask-input" class="ask-label">Ask about anything you've set down</label>
           <div class="ask-row">
-            <input id="ask-input" type="text" placeholder="Where are my keys?">
-            <button type="button" class="ask-mic" id="ask-mic" aria-label="Ask out loud (push to talk)">
+            <div class="ask-field"><input id="ask-input" type="text" placeholder="Where are my keys?"></div>
+            <button type="button" class="ask-mic fx-ripple" id="ask-mic" aria-label="Ask out loud (push to talk)">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
             </button>
-            <button type="submit" class="ask-go">Find it</button>
+            <button type="submit" class="ask-go fx-wipe"><span class="fx-label">Find it</span></button>
           </div>
         </form>
 
-        <section class="card tracking" aria-labelledby="tracking-h">
+        <section class="card tracking fx-spot" aria-labelledby="tracking-h">
           <div class="card-head">
             <h2 id="tracking-h">Tracking</h2>
-            <span class="card-meta" id="tracking-count"></span>
+            <span class="card-meta mono" id="tracking-count"></span>
           </div>
-          <button type="button" class="teach-open" id="teach-open">
+          <button type="button" class="teach-open fx-spot" id="teach-open">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="3"/></svg>
             <span><b>Teach by showing</b><small>Hold up any object to the laptop camera and it learns it</small></span>
           </button>
@@ -70,14 +77,14 @@
           <form class="track-add" id="track-form" autocomplete="off">
             <label for="track-input" class="visually-hidden">Track something new</label>
             <input id="track-input" type="text" placeholder="Something new? Type its name, e.g. retainer case">
-            <button type="submit" class="icon-btn">Add</button>
+            <button type="submit" class="icon-btn fx-brackets">Add</button>
           </form>
           <div class="suggest" id="suggest"></div>
         </section>
       </section>
 
       <aside class="col-side">
-        <section class="card status" id="status" data-state="IDLE" aria-live="polite">
+        <section class="card status fx-spot" id="status" data-state="IDLE" aria-live="polite">
           <div class="card-head"><h2>Status</h2><span class="card-meta mono" id="status-clock"></span></div>
           <div class="status-headline" id="status-headline">Watching the room</div>
           <div class="status-msg" id="status-msg">Ask where something is.</div>
@@ -89,12 +96,12 @@
           </ol>
         </section>
 
-        <section class="card lastseen" aria-labelledby="lastseen-h">
-          <div class="card-head"><h2 id="lastseen-h">Last seen</h2><span class="card-meta" id="lastseen-count"></span></div>
+        <section class="card lastseen fx-spot" aria-labelledby="lastseen-h">
+          <div class="card-head"><h2 id="lastseen-h">Last seen</h2><span class="card-meta mono" id="lastseen-count"></span></div>
           <ul class="items" id="items"></ul>
         </section>
 
-        <section class="card activity" aria-labelledby="activity-h">
+        <section class="card activity fx-spot" aria-labelledby="activity-h">
           <div class="card-head"><h2 id="activity-h">Activity</h2></div>
           <ol class="log mono" id="log"></ol>
         </section>
@@ -102,11 +109,14 @@
     </main>
   </div>
 
+  <!-- Hovering a Last seen row: its snapshot, bigger -->
+  <div class="peek" id="peek" aria-hidden="true"><img id="peek-img" alt=""><span class="peek-tag mono" id="peek-tag"></span></div>
+
   <dialog class="teach" id="teach" aria-labelledby="teach-h">
     <div class="teach-inner">
       <div class="teach-head">
         <h2 id="teach-h">Teach a new object</h2>
-        <button type="button" class="icon-btn" id="teach-close">Close</button>
+        <button type="button" class="icon-btn fx-brackets" id="teach-close">Close</button>
       </div>
 
       <!-- Live: the app runs the teaching (its laptop camera, its questions). -->
@@ -121,12 +131,12 @@
             <label class="teach-label" for="teach-live-name">What is it?</label>
             <div class="teach-actions">
               <input id="teach-live-name" type="text" placeholder="e.g. retainer case">
-              <button type="submit" class="icon-btn">Send</button>
+              <button type="submit" class="icon-btn fx-brackets">Send</button>
             </div>
           </form>
           <div class="teach-actions" id="teach-live-yesno" hidden>
-            <button type="button" class="ask-go" id="teach-yes">Yes, that's it</button>
-            <button type="button" class="icon-btn" id="teach-no">No</button>
+            <button type="button" class="ask-go fx-wipe" id="teach-yes"><span class="fx-label">Yes, that's it</span></button>
+            <button type="button" class="icon-btn fx-brackets" id="teach-no">No</button>
           </div>
           <ol class="teach-steps">
             <li>Hold it up to the laptop camera and turn it a little.</li>
@@ -134,7 +144,7 @@
             <li>Answer "is this it?" with Yes or No.</li>
           </ol>
           <div class="teach-actions">
-            <button type="button" class="icon-btn" id="teach-cancel">Cancel teaching</button>
+            <button type="button" class="icon-btn fx-brackets" id="teach-cancel">Cancel teaching</button>
           </div>
         </div>
       </div>
@@ -163,8 +173,8 @@
           <div class="teach-shots" id="teach-shots"></div>
 
           <div class="teach-actions">
-            <button type="button" class="icon-btn" id="teach-capture">Capture</button>
-            <button type="button" class="ask-go" id="teach-save" disabled>Save to memory</button>
+            <button type="button" class="icon-btn fx-brackets" id="teach-capture">Capture</button>
+            <button type="button" class="ask-go fx-wipe" id="teach-save" disabled><span class="fx-label">Save to memory</span></button>
           </div>
           <p class="teach-msg" id="teach-msg" aria-live="polite"></p>
         </div>
