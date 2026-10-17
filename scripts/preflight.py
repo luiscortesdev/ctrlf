@@ -31,7 +31,7 @@ def report(ok, what, fix=None):
 
 
 def mac_address():
-    """The Mac's address on the network it would use to reach the camera."""
+    """The laptop's address on the network it would use to reach the camera."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(("172.20.10.1", 9))  # no packet is sent; it just picks the route
@@ -45,7 +45,7 @@ def mac_address():
 def main():
     print("Network")
     ip = mac_address()
-    report(ip is not None and ip.startswith("172.20.10."), f"Mac at {ip}",
+    report(ip is not None and ip.startswith("172.20.10."), f"laptop at {ip}",
            "Join the iPhone hotspot (keep its hotspot screen open; Maximize Compatibility on).")
 
     print("Camera")
@@ -77,8 +77,9 @@ def main():
         time.sleep(0.1)
     report(pointer.connected, f"connected, at pan {pointer.pan:g} tilt {pointer.tilt:g}"
            if pointer.connected else "not found",
-           "Power the ESP32 and put it on the hotspot (or plug it into the Mac). Is another "
-           "program (the app, Arduino's Serial Monitor) holding it?")
+           "Power the ESP32 and put it on the hotspot (or plug its COM port into the laptop; "
+           "CTRLF_PORT=COM5 picks the port). Is another program (the app, a Serial Monitor) "
+           "holding it?")
     if pointer.connected:
         report(pointer.has_ring, "LED ring firmware", "Upload the firmware with the ring.")
         pointer.ring("W")
@@ -104,8 +105,14 @@ def main():
         report(True, "GEMINI = False: offline (Whisper + the Mac's voice)")
     from huggingface_hub import try_to_load_from_cache
 
+    if sys.platform == "darwin":
+        whisper = "mlx-community/whisper-small.en-mlx"
+    else:  # faster-whisper's model for this laptop (src/voice.py)
+        from src.voice import whisper_setup
+
+        whisper = f"Systran/faster-whisper-{whisper_setup()[0]}"
     for name, file in (("google/owlv2-base-patch16-ensemble", "config.json"),
-                       ("mlx-community/whisper-small.en-mlx", "config.json")):
+                       (whisper, "config.json")):
         cached = isinstance(try_to_load_from_cache(name, file), str)
         report(cached, f"{name.split('/')[1]} downloaded",
                "Run scripts/cache_models.py while there's good Wi-Fi.")
@@ -120,10 +127,11 @@ def main():
                "judges hear the answers (System Settings > Sound).")
     except Exception as e:
         report(False, f"audio: {e!r:.100}", "Plug in / pick a mic in System Settings > Sound.")
-    volume = subprocess.run(["osascript", "-e", "output volume of (get volume settings)"],
-                            capture_output=True, text=True).stdout.strip()
-    report(volume.isdigit() and int(volume) >= 60, f"volume {volume or '?'}%",
-           "Turn the volume up: the hall is loud.")
+    if sys.platform == "darwin":  # (no simple way to read it on Windows: check it by ear)
+        volume = subprocess.run(["osascript", "-e", "output volume of (get volume settings)"],
+                                capture_output=True, text=True).stdout.strip()
+        report(volume.isdigit() and int(volume) >= 60, f"volume {volume or '?'}%",
+               "Turn the volume up: the hall is loud.")
 
     print()
     if problems:

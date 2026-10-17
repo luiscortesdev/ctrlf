@@ -210,7 +210,7 @@ class Aimer:
     another, find the dot, correct by the difference the mapping predicts."""
 
     MAX_TRIES = 5
-    HOLD_SECS = 8.0  # how long the laser stays on the target afterwards
+    HOLD_SECS = 4.0  # how long the laser stays on the target afterwards (3-5 s to see it)
 
     def __init__(self, pointer, mapping, lag=0.0):
         # lag: how far the camera's picture runs behind; every wait gets that much longer
@@ -291,6 +291,8 @@ class Aimer:
                                    f"{self.best[0]:.0f} px off")
         (tp, tt), (dp, dt) = self._angles(self.target), self._angles(dot)
         pan, tilt = here[0] + (tp - dp), here[1] + (tt - dt)
+        # As far as the limits let it go (a target above the table stays out of reach).
+        pan, tilt = min(max(pan, PAN_MIN), PAN_MAX), min(max(tilt, TILT_MIN), TILT_MAX)
         if abs(pan - here[0]) < 0.05 and abs(tilt - here[1]) < 0.05:
             return self._hold(now, f"as close as the servos allow ({err:.0f} px off)")
         self._go((pan, tilt), now)
