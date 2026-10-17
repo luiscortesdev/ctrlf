@@ -625,10 +625,14 @@ def voice_context(app):
             "conversation": [line for when, line in list(CONVERSATION) if now - when < CONVERSATION_SECS]}
 
 
-def voice_commands(meaning):
+def voice_commands(meaning, naming=False):
     """Gemini's actions -> what App.command() understands (the same as typing them).
-    A chat reply is said right away."""
+    A chat reply is said right away. naming: it just asked what something is called, so a
+    find is the answer: "my phone" once came back as "where is my phone", and that got
+    learned as the name."""
     actions = [(a["do"], (a.get("thing") or "").strip().lower()) for a in meaning["actions"]]
+    if naming:
+        actions = [("name" if do == "find" else do, thing) for do, thing in actions]
     named = [thing for do, thing in actions if do == "name" and thing]
     if named and any(do == "teach" and not thing for do, thing in actions):
         # "learn this, it's my retainer case" can come back as teach + name
@@ -1523,7 +1527,8 @@ def main():
                 if text:
                     CONVERSATION.append((time.time(), f"Person: {text}"))
                 if meaning is not None:
-                    commands = voice_commands(meaning)
+                    t = app.teach
+                    commands = voice_commands(meaning, t is not None and t["phase"] in ("naming", "first name"))
                     print(f'\n(heard: "{text}" -> Gemini: {"; ".join(commands) or "-"})')
                     for c in commands:
                         questions.put(c)

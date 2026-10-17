@@ -32,6 +32,26 @@ def test_names():
         del app.TAUGHT["bhar"]
 
 
+def test_voice_commands():
+    find = {"actions": [{"do": "find", "thing": "phone"}]}
+    assert app.voice_commands(find) == ["where is my phone"]
+    # right after it asked what something is called, "my phone" is the name, not a find
+    assert app.voice_commands(find, naming=True) == ["phone"]
+    teach = {"actions": [{"do": "teach"}, {"do": "name", "thing": "retainer case"}]}
+    assert app.voice_commands(teach) == ["learn my retainer case"]
+
+
+def test_speech_used_up():
+    from src import gemini
+
+    class Quota(Exception):
+        code = 429
+
+    assert gemini._used_up_wait(Quota("... PerDay ... 'retryDelay': '120s'")) == 120
+    assert gemini._used_up_wait(Quota("per minute")) is None  # not a daily limit: retry
+    assert gemini._used_up_wait(type("Credits", (Exception,), {"code": 402})()) == 3600
+
+
 def test_tracker_needs_two_sightings_and_keeps_things_steady():
     tr = tracker.Tracker(lambda label: 0.3)
     tr.update([("keys", 0.4, (100, 100, 140, 130))], 0.0)
