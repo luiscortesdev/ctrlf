@@ -1,0 +1,7 @@
+# Created when the app runs: the memory and its object snapshots (photos of the room)
+memory.db
+snapshots/
+view_*.jpg
+weights/
+__pycache__/
+venv/
