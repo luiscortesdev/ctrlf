@@ -1195,6 +1195,23 @@ class App:
             tol = max(10, 0.3 * min(obj["x2"] - obj["x1"], obj["y2"] - obj["y1"]))
             self.aimer.start((obj["cx"], obj["cy"]), tol, (obj["frame_w"], obj["frame_h"]), now)
 
+    def point(self, name, now):
+        """Point at it without answering out loud (the website's /api/point)."""
+        label = name if name in TAUGHT else find_label(name) or taught_name(name) or name
+        obj, _ = self.locate(label, now)
+        if obj:
+            self.show(label, obj, now)
+        else:
+            say(f"I haven't seen your {label} yet.")
+
+    def aim_at(self, point, size, now):
+        """Point the laser at a spot in the room view: point and size in pixels."""
+        self.highlight = None
+        if not (self.aimer and self.pointer.connected):
+            print("(the laser isn't connected)")
+            return
+        self.aimer.start(point, max(10, 0.02 * min(size)), size, now)
+
     def locate(self, label, now):
         """(where it is or was, visible right now?). A live sighting wins over memory,
         so it can answer about something you're holding before it has been remembered."""
@@ -1542,6 +1559,14 @@ def main():
                     voice.toggle()
                 elif kind == "click" and app.teach and app.teach["phase"] not in ("naming", "first name"):
                     app.click_teach((text[0] * frame.shape[1], text[1] * frame.shape[0]), now)
+                elif kind == "teach":
+                    print(f'\n(website: teach "{text}")')
+                    app.start_teach(text, None, now)
+                elif kind == "point":
+                    app.point(text, now)
+                elif kind == "aim":
+                    h, w = frame.shape[:2]
+                    app.aim_at((text[0] * w, text[1] * h), (w, h), now)
         while not questions.empty():
             text = questions.get()
             if web:

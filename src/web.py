@@ -9,9 +9,18 @@ thread, using only the standard library (no extra installs):
     POST /api/command      {"text": "where are my keys?"}: same as typing it in Terminal
     POST /api/listen       push-to-talk, same as SPACE in the video window
     POST /api/click        {"x": 0-1, "y": 0-1}: while teaching, "it's this one"
-    GET  /video            live room view with boxes (MJPEG)
+    GET  /video            live room view with boxes (MJPEG); also /api/video_feed
     GET  /video/teach      the laptop camera while teaching (MJPEG)
     GET  /snapshots/<f>    last-seen snapshots;  GET /taught/<f>  taught things' photos
+
+The same, one piece at a time (for scripts and other clients):
+
+    GET  /api/status                 state, target, message, aim, voice, laser_connected
+    GET  /api/items                  what it remembers, with snapshot_url
+    GET  /api/items/<name>/snapshot  that thing's last-seen snapshot (JPEG)
+    POST /api/query                  {"query": "where are my keys?"}
+    POST /api/teach                  {"label": "keys"}: start teaching it
+    POST /api/point                  {"target": "keys"} or {"x": 0-1, "y": 0-1}: aim the laser
 
 The app's objects (memory's SQLite connection, the tracker) belong to the main loop, so
 the main loop calls tick() and everything the server sends is built there, never in the
@@ -19,12 +28,14 @@ server's threads.
 """
 
 import json
+import math
 import os
+import re
 import threading
 import time
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 import cv2
 
@@ -32,6 +43,7 @@ PORT = int(os.environ.get("CTRLF_WEB_PORT", "8000"))
 STATE_EVERY = 0.2   # seconds between state updates
 VIDEO_EVERY = 1 / 15  # live view frames per second sent to the browser
 JPEG_QUALITY = 75
+LABEL_RE = re.compile(r"[a-z0-9][a-z0-9 '-]{0,39}")  # a name to teach: "retainer case"
 
 TYPES = {  # set explicitly: Windows' registry can map .js to text/plain
     ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
@@ -71,28 +83,38 @@ class WebBridge:
         self.room = Stream()
         self.teach_feed = Stream()
         self.actions = deque()      # from the browser, run by the main loop
+        self.state = None           # the latest _state(), replaced (never changed) by tick()
         self.state_json = b"{}"
         self.state_at = 0.0
         self.heard = None           # (time, text) of the last question or command
         self.server = None
+        self.port = None
 
     # ---- server
-    def start(self):
+    def start(self, port=PORT):
+        """port 0 picks a free one (see self.port)."""
         bridge = self
 
         class Handler(_Handler):
             pass
         Handler.bridge = bridge
         try:
-            self.server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+            self.server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
         except OSError as e:
-            print(f"(website off: port {PORT} is busy ({e}). Stop the other server, "
+            print(f"(website off: port {port} is busy ({e}). Stop the other server, "
                   f"or set CTRLF_WEB_PORT to another port.)")
             return False
         self.server.daemon_threads = True
+        self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
-        print(f"Website: http://localhost:{PORT}  (dashboard: /dashboard.html)")
+        print(f"Website: http://localhost:{self.port}  (dashboard: /dashboard.html)")
         return True
+
+    def stop(self):
+        if self.server:
+            self.server.shutdown()
+            self.server.server_close()
+            self.server = None
 
     # ---- called by the main loop
     def take_actions(self):
@@ -108,8 +130,11 @@ class WebBridge:
             self.teach_feed.put(teach_view, now)
         if now - self.state_at >= STATE_EVERY:
             self.state_at = now
-            self.state_json = json.dumps(
-                self._state(app, voice, detector, said, now, helpers, teach_view is not None)).encode()
+            # The handlers read self.state from their own threads, so it's swapped for a new
+            # dict, never changed in place.
+            state = self._state(app, voice, detector, said, now, helpers, teach_view is not None)
+            self.state_json = json.dumps(state).encode()
+            self.state = state
 
     # ---- the dashboard's view of the app
     def _state(self, app, voice, detector, said, now, h, teach_live):
@@ -199,13 +224,21 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _json(self, code, obj):
+        return self._send(code, json.dumps(obj).encode())
+
+    def _bad(self, error):
+        return self._json(400, {"ok": False, "error": error})
+
     def do_GET(self):
         path = unquote(urlparse(self.path).path)
         b = self.bridge
         if path == "/api/state":
             return self._send(200, b.state_json)
-        if path == "/video":
+        if path in ("/video", "/api/video_feed"):
             return self._stream(b.room)
+        if path.startswith("/api/"):
+            return self._api_get(path, b.state)
         if path == "/video/teach":
             return self._stream(b.teach_feed)
         if path.startswith("/snapshots/"):
@@ -216,13 +249,52 @@ class _Handler(BaseHTTPRequestHandler):
             path = "/index.html"
         return self._file(b.web_dir, path.lstrip("/"))
 
+    def _api_get(self, path, state):
+        """Pieces of the latest state, built by the main loop (state is never changed)."""
+        m = re.fullmatch(r"/api/items/(.+)/snapshot", path)
+        if path not in ("/api/status", "/api/items") and not m:
+            return self._json(404, {"ok": False})
+        if state is None:
+            return self._json(503, {"ok": False, "error": "starting"})
+        if path == "/api/status":  # status.target is the name; target_bbox where it is
+            keys = ("now", "aim", "teach", "voice", "detector_fps", "laser_connected")
+            return self._json(200, {**state["status"], **{k: state[k] for k in keys},
+                                    "target_bbox": state["target"] and state["target"]["bbox"]})
+        if path == "/api/items":
+            return self._json(200, {"items": [
+                {**it, "snapshot_url": f"/api/items/{quote(it['name'])}/snapshot" if it["snapshot"] else None}
+                for it in state["items"]]})
+        item = next((it for it in state["items"] if it["name"] == m.group(1)), None)
+        if not (item and item["snapshot"]):
+            return self._json(404, {"ok": False, "error": "no snapshot"})
+        # Same URL for the newer snapshot once it moves, so the browser mustn't cache it.
+        return self._file(self.bridge.snap_dir, os.path.basename(item["snapshot"]))
+
     def do_POST(self):
         path = urlparse(self.path).path
         try:
             n = int(self.headers.get("Content-Length") or 0)
             data = json.loads(self.rfile.read(n) or b"{}")
         except ValueError:
-            return self._send(400, b'{"ok": false, "error": "bad json"}')
+            return self._bad("bad json")
+        if not isinstance(data, dict):
+            return self._bad("expected a JSON object")
+        if path == "/api/query":  # a question, same as typing it in Terminal
+            text = data.get("query")
+            text = text.strip() if isinstance(text, str) else ""
+            if not text or len(text) > 200:
+                return self._bad('"query" must be text (1-200 characters)')
+            self.bridge.actions.append(("command", text))
+            return self._json(200, {"ok": True, "action": "query", "query": text})
+        if path == "/api/teach":  # start teaching it, like "learn my keys"
+            label = data.get("label")
+            label = " ".join(label.lower().split()) if isinstance(label, str) else ""
+            if not LABEL_RE.fullmatch(label):
+                return self._bad('"label" must be a name: up to 40 letters, numbers and spaces')
+            self.bridge.actions.append(("teach", label))
+            return self._json(200, {"ok": True, "action": "teach", "label": label})
+        if path == "/api/point":
+            return self._point(data)
         if path == "/api/command":
             text = str(data.get("text", "")).strip()[:200]
             if not text:
@@ -240,6 +312,26 @@ class _Handler(BaseHTTPRequestHandler):
             self.bridge.actions.append(("listen", None))
             return self._send(200, b'{"ok": true}')
         return self._send(404, b'{"ok": false}')
+
+    def _point(self, data):
+        """Aim the laser at something it knows ({"target"}) or a spot in the view ({"x", "y"})."""
+        target = data.get("target")
+        has_xy = "x" in data or "y" in data
+        if target is not None and not has_xy:
+            target = " ".join(target.lower().split()) if isinstance(target, str) else ""
+            if not target or len(target) > 60:
+                return self._bad('"target" must be a name')
+            self.bridge.actions.append(("point", target))
+            return self._json(200, {"ok": True, "action": "point", "target": target})
+        if target is None and has_xy:
+            x, y = data.get("x"), data.get("y")
+            if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+                       and 0 <= v <= 1 for v in (x, y)):
+                return self._bad('"x" and "y" must both be numbers from 0 to 1')
+            x, y = float(x), float(y)
+            self.bridge.actions.append(("aim", (x, y)))
+            return self._json(200, {"ok": True, "action": "point", "x": x, "y": y})
+        return self._bad('send either {"target": name} or {"x": 0-1, "y": 0-1}')
 
     def _file(self, folder, rel, cache=False):
         full = os.path.realpath(os.path.join(folder, rel))
