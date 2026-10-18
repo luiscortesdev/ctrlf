@@ -87,7 +87,7 @@ function initLive() {
     const x = (e.clientX - r.left - (r.width - w) / 2) / w;
     const y = (e.clientY - r.top - (r.height - h) / 2) / h;
     if (x < 0 || x > 1 || y < 0 || y > 1) return;
-    fetch("/api/click", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ x, y }) });
+    api.click(x, y);
     sfx.tick(1.2);
   });
   api.on("teach", onTeach);

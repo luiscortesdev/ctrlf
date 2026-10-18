@@ -162,7 +162,7 @@ api.on("state", (msg) => {
       setSteps(null, null);
       break;
     case "QUERYING":
-      setHeadline("Listening…", msg.heard ? `“${msg.heard}”` : "");
+      setHeadline("Listening…", (msg.heard || msg.message) ? `“${msg.heard || msg.message}”` : "");  // live: message, mock: heard
       setSteps("heard", "heard");
       play(() => sfx.tick(0.8));
       break;
