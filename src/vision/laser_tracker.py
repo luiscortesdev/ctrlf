@@ -25,7 +25,9 @@ CALIB_PATH = os.path.join(ROOT, "data", "calibration.json")  # made by scripts/c
 
 # Keep in sync with esp32_pointer.ino.
 PAN_MIN, PAN_MAX = 0, 180
-TILT_MIN, TILT_MAX = 90, 160   # higher = down
+# Higher tilt = down. TILT_MIN keeps the beam on the floor: mounted high in the corner of the
+# room (Oct 17), the bottom of the far wall is at tilt ~110. The firmware's own limit is 90.
+TILT_MIN, TILT_MAX = 112, 160
 SECS_PER_DEG = 0.010           # the firmware glides 1 degree per 10 ms
 
 # Timing guesses; tune them once the laser is here (the camera runs a few frames behind).
@@ -127,13 +129,15 @@ class Calibration:
     """Maps a spot in the image to the pan/tilt angles that put the dot there, and back.
     Each direction is a polynomial fitted to the calibration points. Image positions are
     fractions of the frame (u = x / width, v = y / height), so the camera's resolution
-    doesn't matter."""
+    doesn't matter. manual: made by hand (scripts/calibrate_manual.py) because the camera
+    can't see the dot, so the Aimer points by it without watching for the dot."""
 
-    def __init__(self, deg, to_angles, to_image, points, error_deg, error_px, size):
+    def __init__(self, deg, to_angles, to_image, points, error_deg, error_px, size, manual=False):
         self.deg = deg
         self.A = np.asarray(to_angles, float)   # (terms, 2): image -> pan, tilt
         self.B = np.asarray(to_image, float)    # (terms, 2): angles -> u, v
         self.points, self.error_deg, self.error_px, self.size = points, error_deg, error_px, size
+        self.manual = manual
 
     @classmethod
     def fit(cls, points, size):
@@ -177,7 +181,7 @@ class Calibration:
             json.dump({"degree": self.deg, "to_angles": self.A.tolist(),
                        "to_image": self.B.tolist(),
                        "points": self.points, "error_deg": self.error_deg,
-                       "error_px": self.error_px, "size": self.size,
+                       "error_px": self.error_px, "size": self.size, "manual": self.manual,
                        "saved": time.strftime("%Y-%m-%d %H:%M")}, f, indent=1)
 
     @classmethod
@@ -187,7 +191,7 @@ class Calibration:
         with open(path) as f:
             d = json.load(f)
         return cls(d["degree"], d["to_angles"], d["to_image"], d["points"], d["error_deg"],
-                   d["error_px"], d["size"])
+                   d["error_px"], d["size"], d.get("manual", False))
 
 
 class RoughMap:
@@ -210,7 +214,7 @@ class Aimer:
     another, find the dot, correct by the difference the mapping predicts."""
 
     MAX_TRIES = 5
-    HOLD_SECS = 8.0  # how long the laser stays on the target afterwards
+    HOLD_SECS = 4.0  # how long the laser stays on the target afterwards (3-5 s to see it)
 
     def __init__(self, pointer, mapping, lag=0.0):
         # lag: how far the camera's picture runs behind; every wait gets that much longer
@@ -230,6 +234,11 @@ class Aimer:
             # the picture could pass for it, so point once and don't chase.
             self.pointer.move(*self._angles(target), laser=True)
             self._hold(now, "not calibrated yet, so pointing roughly (run calibrate.py)")
+            return
+        if getattr(self.map, "manual", False):
+            # Calibrated by hand because the camera can't see the dot: no use watching for it.
+            self.pointer.move(*self._angles(target), laser=True)
+            self._hold(now, "pointing by the hand calibration")
             return
         self._go(self._angles(target), now)
 
@@ -291,6 +300,8 @@ class Aimer:
                                    f"{self.best[0]:.0f} px off")
         (tp, tt), (dp, dt) = self._angles(self.target), self._angles(dot)
         pan, tilt = here[0] + (tp - dp), here[1] + (tt - dt)
+        # As far as the limits let it go (a target above the table stays out of reach).
+        pan, tilt = min(max(pan, PAN_MIN), PAN_MAX), min(max(tilt, TILT_MIN), TILT_MAX)
         if abs(pan - here[0]) < 0.05 and abs(tilt - here[1]) < 0.05:
             return self._hold(now, f"as close as the servos allow ({err:.0f} px off)")
         self._go((pan, tilt), now)

@@ -883,12 +883,14 @@ class App:
         self.last_taught = None  # the label taught last ("forget that", "call it ...")
         self.last_pass = None  # when the latest detector pass started
         self.pass_secs = 0.0   # seconds between passes (~0.4 on the Mac, 3+ on a laptop CPU)
+        self.frame_size = None  # (width, height) of the camera's pictures, once a pass is in
 
     def update(self, candidates, frame, now, views=(), look=None):
         """candidates: [(label, confidence, (x1, y1, x2, y2))] from one finished detector pass.
         views: [(label, box, embedding, similarity)] for taught things in it. look: that
         pass's detector.Look of the whole view (to see hands)."""
         h, w = frame.shape[:2]
+        self.frame_size = (w, h)
         if self.last_pass is not None and now > self.last_pass:
             gap = now - self.last_pass
             self.pass_secs = gap if not self.pass_secs else 0.8 * self.pass_secs + 0.2 * gap
@@ -1271,9 +1273,13 @@ class App:
         self.highlight = (label, now + HIGHLIGHT_SECS)
         self.pointer.ring(ring, ring_angle(obj))
         if self.aimer:
+            # In the pixels of the pictures the Aimer will get: memory keeps each box in its
+            # camera's own, and the app can be on another camera now.
+            w, h = self.frame_size or (obj["frame_w"], obj["frame_h"])
+            sx, sy = w / obj["frame_w"], h / obj["frame_h"]
             # Close enough = within about a third of the object's size.
-            tol = max(10, 0.3 * min(obj["x2"] - obj["x1"], obj["y2"] - obj["y1"]))
-            self.aimer.start((obj["cx"], obj["cy"]), tol, (obj["frame_w"], obj["frame_h"]), now)
+            tol = max(10, 0.3 * min((obj["x2"] - obj["x1"]) * sx, (obj["y2"] - obj["y1"]) * sy))
+            self.aimer.start((obj["cx"] * sx, obj["cy"] * sy), tol, (w, h), now)
 
     def point(self, name, now):
         """Point at it without answering out loud (the website's /api/point)."""
