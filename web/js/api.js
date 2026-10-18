@@ -124,6 +124,7 @@ async function poll() {
 }
 
 function applyState(s) {
+  if (!s.items) return;  // {} until the app's first pass
   // Items: send only the ones that changed.
   const names = new Set();
   for (const it of s.items) {

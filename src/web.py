@@ -52,7 +52,7 @@ TYPES = {  # set explicitly: Windows' registry can map .js to text/plain
     ".md": "text/markdown; charset=utf-8", ".txt": "text/plain; charset=utf-8",
     ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf", ".otf": "font/otf",
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".svg": "image/svg+xml",
-    ".ico": "image/x-icon",
+    ".ico": "image/x-icon", ".mp3": "audio/mpeg",
 }
 
 
@@ -328,16 +328,17 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/point":
             return self._point(data)
         if path == "/api/command":
-            text = str(data.get("text", "")).strip()[:200]
+            text = data.get("text")  # not str(): {"text": null} would ask about "None"
+            text = text.strip()[:200] if isinstance(text, str) else ""
             if not text:
-                return self._send(400, b'{"ok": false, "error": "empty"}')
+                return self._bad('"text" must be text')
             self.bridge.actions.append(("command", text))
             return self._send(200, b'{"ok": true}')
         if path == "/api/click":  # while teaching: "it's this one" (x, y as 0-1 of the view)
             try:
                 point = (min(1.0, max(0.0, float(data["x"]))), min(1.0, max(0.0, float(data["y"]))))
             except (KeyError, TypeError, ValueError):
-                return self._send(400, b'{"ok": false}')
+                return self._bad('"x" and "y" must both be numbers')
             self.bridge.actions.append(("click", point))
             return self._send(200, b'{"ok": true}')
         if path == "/api/listen":
