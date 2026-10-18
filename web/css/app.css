@@ -212,9 +212,9 @@ h2 { margin: 0; font-size: 28px; line-height: 1.2; font-weight: 700; }
 .laser-status[data-phase="init"] .laser-orb i { animation: blink 0.9s infinite; }
 .laser-status[data-phase="on"] .laser-orb { border-color: #FF2E2E; box-shadow: 0 0 0 6px rgba(255, 46, 46, 0.15), 0 0 40px rgba(255, 46, 46, 0.45); }
 .laser-status[data-phase="on"] .laser-orb i { animation: dot-pulse 1.2s ease-in-out infinite; }
-.laser-status[data-phase="hidden"] .laser-orb, .laser-status[data-phase="none"] .laser-orb, .laser-status[data-phase="done"] .laser-orb { border-color: var(--edge-strong); background: none; }
-.laser-status[data-phase="hidden"] .laser-orb i, .laser-status[data-phase="none"] .laser-orb i, .laser-status[data-phase="done"] .laser-orb i { background: var(--text-3); box-shadow: none; }
-.laser-status[data-phase="hidden"] .laser-label, .laser-status[data-phase="none"] .laser-label, .laser-status[data-phase="done"] .laser-label { color: var(--text-2); }
+.laser-status[data-phase="hidden"] .laser-orb, .laser-status[data-phase="none"] .laser-orb, .laser-status[data-phase="done"] .laser-orb, .laser-status[data-phase="off"] .laser-orb { border-color: var(--edge-strong); background: none; }
+.laser-status[data-phase="hidden"] .laser-orb i, .laser-status[data-phase="none"] .laser-orb i, .laser-status[data-phase="done"] .laser-orb i, .laser-status[data-phase="off"] .laser-orb i { background: var(--text-3); box-shadow: none; }
+.laser-status[data-phase="hidden"] .laser-label, .laser-status[data-phase="none"] .laser-label, .laser-status[data-phase="done"] .laser-label, .laser-status[data-phase="off"] .laser-label { color: var(--text-2); }
 @keyframes spin { to { transform: rotate(360deg); } }
 #find-h em { font-style: normal; color: #FF8A8A; text-transform: capitalize; }
 .answer { margin: 0 0 22px; font-size: clamp(22px, 2.4vw, 28px); line-height: 1.4; font-weight: 600; color: var(--text); min-height: 1.4em; max-width: 36em; }

@@ -1114,7 +1114,7 @@ class App:
                     say(f"I can't see it there. Click on your {t['name']} in the video.")
                 else:
                     self.teach = None
-                    say("I couldn't tell what to look at. Say learn this, then click on it in the video.")
+                    say("I couldn't tell what to look at. Try again, and click on it in the video.")
             elif t["capture_from"] is not None and now - t["capture_from"] >= TEACH_SECS:
                 got = self.detector.stop_teach()
                 if not got or len(got["pictures"]) < 2:

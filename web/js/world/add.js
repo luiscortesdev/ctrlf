@@ -95,7 +95,7 @@ async function start(raw) {
     say("Starting the camera…");
     feed("laptop");
     h.active = true;
-    try { await api.command(`this is my ${name}`); } catch { $("add-error").textContent = "Couldn't reach the app."; enter(); }
+    try { await api.command(`this is my ${name}`); } catch { enter(); $("add-error").textContent = "Couldn't reach the app."; }
   } else {
     await startWebcam();
   }
@@ -159,7 +159,7 @@ function clickFeed(e) {
   const w = img.naturalWidth * s, hh = img.naturalHeight * s;
   const x = (e.clientX - r.left - (r.width - w) / 2) / w, y = (e.clientY - r.top - (r.height - hh) / 2) / hh;
   if (x < 0 || x > 1 || y < 0 || y > 1) return;
-  fetch("/api/click", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ x, y }) });
+  api.click(x, y);
 }
 
 function cancel() {

@@ -13,7 +13,7 @@ import * as add from "./add.js";
 
 const $ = (id) => document.getElementById(id);
 let F;
-const S = { view: "home", items: new Map(), taught: [], loaded: false, removing: null, lastState: null, asked: false };
+const S = { view: "home", items: new Map(), taught: [], loaded: false, removing: null, lastState: null, asked: false, laserOk: true };   // laserOk: live mode says if the ESP32 is there
 
 brand.mount();
 fx.init({ grid: false, cursor: false, sounds: false });   // normal cursor, no hover/click sounds
@@ -84,7 +84,7 @@ function renderItems(animate = false) {
       : it.visible ? `<span class="item-status seen"><i></i>In view now</span>` : `<span class="item-status hidden"><i></i>Out of sight</span>`;
     const where = it ? esc(cap(it.where || "somewhere in the room")) : "Put it where the room camera can see it.";
     const when = it ? esc(relTime(it.last_seen)) : "";
-    return `<article class="item${animate ? " enter" : ""}" data-name="${n}" style="--i:${i}" aria-label="${n}">
+    return `<article class="item" data-name="${n}" style="--i:${i}" aria-label="${n}">
       <div class="item-photo">${photo ? `<img src="${esc(photo)}" alt="" onerror="this.remove()">` : ""}<span class="item-mark" data-brand="mark"></span>${status}</div>
       <div class="item-body">
         <span class="item-name">${n}</span>
@@ -99,9 +99,11 @@ function renderItems(animate = false) {
     </article>`;
   }).join("");
   // The app sends updates several times a second; only touch the page when something shown changes.
-  if (html === lastHtml) return;
+  // The fade-in class stays out of the HTML, so the next update doesn't rebuild the cards and cut it short.
+  if (html === lastHtml && !animate) return;
   lastHtml = html;
   $("items-grid").innerHTML = html;
+  if (animate) $("items-grid").querySelectorAll(".item").forEach((el) => el.classList.add("enter"));
   brand.mount($("items-grid"));
 }
 const confirmHtml = (n) => `<div class="item-confirm" role="alertdialog" aria-label="Remove ${n}?">
@@ -179,9 +181,12 @@ const LASER = {
   hidden: ["Laser standing by", "Off (it can't see it)"],
   done:   ["Laser finished", "Off (done pointing)"],
   none:   ["Laser standing by", "Off"],
+  off:    ["Laser not connected", "Not connected"],
 };
-F = { name: null, timer: null };
+F = { name: null, timer: null, laser: null };
 function laser(phase) {
+  F.laser = phase;
+  if (!S.laserOk) phase = "off";   // never claim it's pointing when the ESP32 isn't there
   $("laser-status").dataset.phase = phase;
   $("laser-label").textContent = LASER[phase][0];
   $("stat-laser").textContent = LASER[phase][1];
@@ -229,13 +234,14 @@ function resetFind(text) {
   itemStats(itemIn(text || ""));
   // The laser takes a moment to wake up; show it as ready shortly after, unless an answer came first.
   clearTimeout(F.timer);
-  F.timer = setTimeout(() => { if ($("laser-status").dataset.phase === "init") { laser("search"); steps(1); } }, 900);
+  F.timer = setTimeout(() => { if (F.laser === "init") { laser("search"); steps(1); } }, 900);
 }
 function headline(html, msg) {
   $("find-headline").innerHTML = html;
   $("find-msg").textContent = msg || "";
 }
-function steps(n) { document.querySelectorAll("#find-steps li").forEach((li, i) => li.classList.toggle("on", i <= n)); }
+// Steps 1 ("Laser ready") and 3 ("Pointing at it") stay unticked with no laser connected.
+function steps(n) { document.querySelectorAll("#find-steps li").forEach((li, i) => li.classList.toggle("on", i <= n && (S.laserOk || i % 2 === 0))); }
 setInterval(() => { if (S.view === "find") itemStats(); }, 15000);
 api.on("item", (it) => { if (S.view === "find" && it.name === F.name) itemStats(); });
 
@@ -251,13 +257,13 @@ api.on("state", (m) => {
   // Asked out loud (or from the app's keyboard): show the find screen by itself.
   if (S.loaded && ASKING.has(m.state) && S.view !== "find" && !add.isTeaching()) { resetFind(m.message || ""); show("find", { focus: false }); }
   // Back to idle after an answer: keep the answer on screen.
-  if (m.state === "IDLE" && S.lastState === "REPORTING") { S.lastState = "IDLE"; if ($("laser-status").dataset.phase === "on") laser("done"); return; }
+  if (m.state === "IDLE" && S.lastState === "REPORTING") { S.lastState = "IDLE"; if (F.laser === "on") laser("done"); return; }
   S.lastState = m.state;
   if (m.target) itemStats(m.target);
   switch (m.state) {
     case "IDLE": if (!S.asked) { headline("Ready", "Ask where something is."); laser("none"); steps(-1); } break;
-    case "QUERYING": { const q = m.message || m.heard; headline("Looking…", q ? `You asked: “${q}”` : ""); laser("init"); steps(0); if (q) itemStats(itemIn(q)); break; }
-    case "TRACKING": clearTimeout(F.timer); headline(`Found your <em>${name}</em>`, "Pointing the laser at it now…"); laser("aim"); steps(2); break;
+    case "QUERYING": resetFind(m.message || m.heard); break;   // a new question: forget the last item
+    case "TRACKING": clearTimeout(F.timer); headline(`Found your <em>${name}</em>`, S.laserOk ? "Pointing the laser at it now…" : ""); laser("aim"); steps(2); break;
     case "REPORTING":
       clearTimeout(F.timer);
       if (m.result === "found") {
@@ -276,6 +282,7 @@ api.on("state", (m) => {
   }
 });
 api.on("target", ({ bbox }) => { if (bbox && S.view === "find") laser("on"); });
+api.on("laser", (ok) => { S.laserOk = ok; if (F.laser) laser(F.laser); });
 
 /* ---------------- connection ---------------- */
 
@@ -290,7 +297,7 @@ async function arrive() {
   if (!document.body.classList.contains("arriving")) return;
   try { sessionStorage.removeItem("ctrlf-arrive"); } catch {}
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));   // let the scene draw once
-  const p = world.screenPoint("beacon");
+  const p = world.screenPoint();
   const anim = $("arrive").animate(
     [{ clipPath: `circle(150% at ${p.x}px ${p.y}px)` }, { clipPath: `circle(0px at ${p.x}px ${p.y}px)` }],
     { duration: fx.reduced ? 1 : 1100, easing: "cubic-bezier(0.75, 0, 0.2, 1)", fill: "forwards" });

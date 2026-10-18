@@ -4,7 +4,7 @@
 // If the app isn't running, it falls back to mock mode so the dashboard still
 // works for design and demos (add ?mock to the URL to force it).
 
-const listeners = { item: [], state: [], log: [], tracked: [], target: [], connection: [], teach: [], voice: [], taught: [] };
+const listeners = { item: [], state: [], log: [], tracked: [], target: [], connection: [], teach: [], voice: [], taught: [], laser: [] };
 
 export function on(event, fn) { listeners[event].push(fn); }
 function emit(event, data) { listeners[event].forEach((fn) => fn(data)); }
@@ -53,6 +53,11 @@ export async function listen() {
   else mockAsk("where are my keys?");
 }
 
+// While teaching: "it's this one" (x, y as 0-1 of the room camera picture).
+export function click(x, y) {
+  return fetch("/api/click", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ x, y }) }).catch(() => {});
+}
+
 // Which items show on the dashboard. The app always looks for everything it
 // knows, so in live mode this is a display filter kept in this browser.
 export function setTracked(items) {
@@ -86,7 +91,7 @@ export async function teach(name, images) {
 
 /* ---------------- Live mode ---------------- */
 
-const live = { items: {}, tracked: [], status: "", target: "", said: 0, heard: "", teach: "", voice: "", known: "", failures: 0 };
+const live = { items: {}, tracked: [], status: "", target: "", said: 0, heard: "", teach: "", voice: "", known: "", laser: null, failures: 0 };
 
 // The app pushes its state the moment it changes (/api/events), so a new object shows
 // up here as soon as the app sees it; polling /api/state is only the fallback.
@@ -184,6 +189,7 @@ function applyState(s) {
     emit("teach", { ...s.teach, active: true, message: newSaid[newSaid.length - 1].text });
   }
   if (s.voice !== live.voice) { live.voice = s.voice; emit("voice", s.voice); }
+  if (s.laser_connected !== live.laser) { live.laser = s.laser_connected; emit("laser", !!s.laser_connected); }
 }
 
 /* ---------------- Mock mode ---------------- */

@@ -1,33 +1,21 @@
-// The wherewolf world: a low-poly night forest with a fork and two paths, and a camera
-// that travels down a path and rises into the sky. Everything is built in code (no model
-// files). main.js drives it; this file only knows about the 3D scene.
+// The wherewolf world: a low-poly night forest with a fork, two paths and a red beacon,
+// the app page's background. Everything is built in code (no model files).
 //
 //   init(canvas)            build the scene, start rendering
-//   setHover("add"|"items"|null)   light up a path
-//   go("add"|"items")       the camera travels down that path, then rises into the sky
-//   fly("add"|"items"|"live")  glide through the sky to another sky spot
-//   home()                  back to the fork
-//   onPick(fn) / onHover(fn)   fn("add"|"items") when a path is clicked / hovered (or null)
-//   screenPoint(name)       where something is on screen ("beacon", "add", "items")
-//   drift(on)               background mode: no paths to pick, the camera just drifts slowly
+//   drift(on)               the camera drifts slowly, like standing at the edge of the forest
+//   screenPoint()           where the beacon is on screen (the intro's red shrinks into it)
 
 import * as THREE from "three";
 
-const gsap = window.gsap;
 const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 let renderer, scene, camera, clock;
 const look = new THREE.Vector3();
-const paths = {};      // name -> { curve, ribbon, hit, flies, label point }
-let beacon, hovered = null, place = "fork", busy = false;
-const listeners = { hover: [], pick: [] };
+const paths = {};      // name -> { curve, flies }
+let beacon;
 
 let drifting = false, driftStart = null;
 export function drift(on = true) { drifting = on; driftStart = null; }
-export function onPick(fn) { listeners.pick.push(fn); }
-export function onHover(fn) { listeners.hover.push(fn); }
-export const where = () => place;
-export const isBusy = () => busy;
 
 /* ------------------------------------------------------------------ helpers */
 
@@ -140,13 +128,11 @@ export function init(canvas) {
   gg.computeVertexNormals();
   scene.add(new THREE.Mesh(gg, new THREE.MeshStandardMaterial({ color: COL.ground, roughness: 1, flatShading: true })));
 
-  const pathMat = () => new THREE.MeshStandardMaterial({ color: COL.path, roughness: 1, emissive: 0xff2e2e, emissiveIntensity: 0 });
-  scene.add(ribbon(trunk, 1.5, 0.04, new THREE.MeshStandardMaterial({ color: COL.path, roughness: 1 })));
+  const pathMat = new THREE.MeshStandardMaterial({ color: COL.path, roughness: 1 });
+  scene.add(ribbon(trunk, 1.5, 0.04, pathMat));
   for (const name of ["add", "items"]) {
     const p = paths[name];
-    p.ribbon = ribbon(p.curve, 1.4, 0.05, pathMat()); scene.add(p.ribbon);
-    p.hit = ribbon(p.curve, 5.5, 0.3, new THREE.MeshBasicMaterial({ visible: false })); p.hit.userData.path = name; scene.add(p.hit);
-    p.labelAt = p.curve.getPointAt(0.3).clone().setY(2.6);
+    scene.add(ribbon(p.curve, 1.4, 0.05, pathMat));
     // Red laser-dot fireflies along the path
     const fr = rand(name === "add" ? 11 : 13), fpos = [], base = [];
     for (let i = 0; i < 46; i++) {
@@ -156,7 +142,7 @@ export function init(canvas) {
       fpos.push(x, y, z); base.push(y, fr() * 6.28);
     }
     const fg = new THREE.BufferGeometry(); fg.setAttribute("position", new THREE.Float32BufferAttribute(fpos, 3));
-    p.flies = new THREE.Points(fg, new THREE.PointsMaterial({ map: glowTexture("rgba(255,60,60,1)", "rgba(255,46,46,0)"), size: 0.32, transparent: true, opacity: 0.55, depthWrite: false, blending: THREE.AdditiveBlending }));
+    p.flies = new THREE.Points(fg, new THREE.PointsMaterial({ map: glowTexture("rgba(255,60,60,1)", "rgba(255,46,46,0)"), size: 0.3, transparent: true, opacity: 0.5, depthWrite: false, blending: THREE.AdditiveBlending }));
     p.flies.userData.base = base; scene.add(p.flies);
   }
 
@@ -206,26 +192,8 @@ export function init(canvas) {
   beacon.add(core, glow, pool);
   beacon.userData = { glow, pool };
 
-  setCamera(FORK.pos, FORK.look);
+  camera.position.copy(FORK.pos); look.copy(FORK.look); camera.lookAt(look);
 
-  // Picking
-  const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
-  const pick = (e) => {
-    ndc.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
-    ray.setFromCamera(ndc, camera);
-    const hit = ray.intersectObjects([paths.add.hit, paths.items.hit])[0];
-    return hit ? hit.object.userData.path : null;
-  };
-  canvas.addEventListener("pointermove", (e) => {
-    if (place !== "fork" || busy) return;
-    const p = pick(e);
-    if (p !== hovered) listeners.hover.forEach((fn) => fn(p));
-  });
-  canvas.addEventListener("click", (e) => {
-    if (place !== "fork" || busy) return;
-    const p = pick(e);
-    if (p) listeners.pick.forEach((fn) => fn(p));
-  });
   addEventListener("resize", () => {
     camera.aspect = innerWidth / innerHeight; camera.fov = fitFov(); camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);
@@ -241,16 +209,10 @@ export function init(canvas) {
       const fl = paths[name].flies, a = fl.geometry.attributes.position, b = fl.userData.base;
       for (let i = 0; i < a.count; i++) a.setY(i, b[i * 2] + Math.sin(t * 1.3 + b[i * 2 + 1]) * 0.18);
       a.needsUpdate = true;
-      const on = hovered === name ? 1 : 0;
-      fl.material.opacity += ((on ? 1 : 0.5) - fl.material.opacity) * dt * 4;
-      fl.material.size += ((on ? 0.46 : 0.3) - fl.material.size) * dt * 4;
-      const em = paths[name].ribbon.material;
-      em.emissiveIntensity += ((on ? 0.22 : 0) - em.emissiveIntensity) * dt * 4;
     }
     for (const f of fogs) { f.position.x += f.userData.v * dt; if (f.position.x > 28) f.position.x = -28; }
     stars.rotation.y = t * 0.004;
-    // Background mode: the camera drifts slowly, like standing at the edge of the forest.
-    if (drifting && place === "fork" && !busy && !reduced) {
+    if (drifting && !reduced) {
       if (driftStart === null) driftStart = t;
       const d = t - driftStart;
       camera.position.set(FORK.pos.x + Math.sin(d * 0.06) * 1.4, FORK.pos.y + Math.sin(d * 0.09) * 0.2, FORK.pos.z - Math.sin(d * 0.045) * 0.8);
@@ -263,77 +225,8 @@ export function init(canvas) {
   });
 }
 
-/* ------------------------------------------------------------------ camera moves */
-
+// Where the camera stands: at the edge of the forest, looking at the fork.
 const FORK = { pos: new THREE.Vector3(0, 2.1, 10.5), look: new THREE.Vector3(0, 1.1, -3) };
-const SKY = {
-  add: { pos: new THREE.Vector3(-9, 15, -22), look: new THREE.Vector3(-9, 16.5, -60) },
-  items: { pos: new THREE.Vector3(9, 15, -22), look: new THREE.Vector3(9, 16.5, -60) },
-  live: { pos: new THREE.Vector3(0, 17, -12), look: new THREE.Vector3(0, 18.5, -50) },
-};
-
-function setCamera(pos, at) { camera.position.copy(pos); look.copy(at); camera.lookAt(look); }
-
-function tweenCamera(toPos, toLook, duration, ease = "power2.inOut") {
-  const fromPos = camera.position.clone(), fromLook = look.clone(), o = { t: 0 };
-  return new Promise((done) => {
-    if (reduced) { setCamera(toPos, toLook); return done(); }
-    gsap.to(o, { t: 1, duration, ease, onUpdate: () => {
-      camera.position.lerpVectors(fromPos, toPos, o.t); look.lerpVectors(fromLook, toLook, o.t); camera.lookAt(look);
-    }, onComplete: done });
-  });
-}
-
-export function setHover(name) {
-  if (place !== "fork" || busy) name = null;
-  hovered = name;
-}
-
-// The camera travels down the path at eye height, then rises above the trees.
-export async function go(name) {
-  if (busy || place !== "fork") return;
-  busy = true; setHover(null);
-  const c = paths[name].curve;
-  if (reduced) { place = name; setCamera(SKY[name].pos, SKY[name].look); busy = false; return; }
-
-  const o = { s: 0 }, camPos = new THREE.Vector3(), target = new THREE.Vector3();
-  const start = camera.position.clone(), startLook = look.clone();
-  await new Promise((r) => gsap.to(o, { s: 0.74, duration: 2.6, ease: "power2.inOut", onUpdate: () => {
-    camPos.copy(c.getPointAt(o.s)).setY(1.6 + o.s * 1.4);
-    target.copy(c.getPointAt(Math.min(1, o.s + 0.18))).setY(1.2 + o.s * 2);
-    const k = Math.min(1, o.s * 4);                       // ease in from the fork view
-    camera.position.lerpVectors(start, camPos, k); look.lerpVectors(startLook, target, k); camera.lookAt(look);
-  }, onComplete: r }));
-
-  place = name;
-  await tweenCamera(SKY[name].pos, SKY[name].look, 1.8, "power2.inOut");
-  busy = false;
-}
-
-// Glide through the sky between the two sky spots (and the live view).
-export async function fly(to) {
-  if (busy) return;
-  busy = true;
-  if (place === "fork") {
-    await tweenCamera(SKY[to].pos, SKY[to].look, reduced ? 0 : 1.8, "power2.inOut");
-  } else {
-    // up and over, a little higher in the middle
-    const mid = SKY[place].pos.clone().lerp(SKY[to].pos, 0.5).add(new THREE.Vector3(0, 3, -2));
-    const midLook = SKY[place].look.clone().lerp(SKY[to].look, 0.5).add(new THREE.Vector3(0, 3, 0));
-    await tweenCamera(mid, midLook, reduced ? 0 : 0.8, "power2.in");
-    await tweenCamera(SKY[to].pos, SKY[to].look, reduced ? 0 : 0.9, "power2.out");
-  }
-  place = to; busy = false;
-}
-
-// Back to the fork: glide over, then come down.
-export async function home() {
-  if (busy || place === "fork") return;
-  busy = true;
-  await tweenCamera(new THREE.Vector3(0, 13, 14), new THREE.Vector3(0, 8, -20), reduced ? 0 : 1.1, "power2.in");
-  await tweenCamera(FORK.pos, FORK.look, reduced ? 0 : 1.3, "power2.out");
-  place = "fork"; busy = false;
-}
 
 // Narrow (phone) screens: widen the view so both paths still fit.
 function fitFov() {
@@ -343,11 +236,10 @@ function fitFov() {
   return Math.min(v, 72);
 }
 
-// Screen position (CSS pixels) of the beacon or a path label.
-export function screenPoint(what) {
+// Screen position (CSS pixels) of the beacon.
+export function screenPoint() {
   const v = new THREE.Vector3();
-  if (what === "beacon") beacon.children[0].getWorldPosition(v);
-  else v.copy(paths[what].labelAt);
+  beacon.children[0].getWorldPosition(v);
   v.project(camera);
   return { x: (v.x * 0.5 + 0.5) * innerWidth, y: (-v.y * 0.5 + 0.5) * innerHeight, visible: v.z < 1 };
 }
