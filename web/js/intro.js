@@ -1,5 +1,10 @@
 import * as THREE from "three";
 import * as sfx from "./sound.js";
+import * as fx from "./fx.js";
+import * as brand from "./brand.js";
+
+brand.mount();
+fx.init({ grid: false }); // the 3D scene is the background here
 
 const gsap = window.gsap;
 const $ = (id) => document.getElementById(id);
@@ -400,40 +405,52 @@ function buildTimeline() {
   lineIn(tl, "It *points.*", 12.7);
   lineOut(tl, 14.3);
 
-  // 14.4  Title card
+  // 14.4  Title card: the wolf, its red eye lights, then "wherewolf." wipes in
   tl.to(canvas, { opacity: 0.25, duration: 0.8 }, 14.4);
   tl.to(".tag", { opacity: 0, duration: 0.4 }, 14.4);
   tl.to(camera.position, { x: 0, y: 6, z: 8, duration: 4.2, ease: "power1.inOut" }, 14.4);
   tl.to(lookTarget, { x: 0, y: 0, z: 0, duration: 4.2, ease: "power1.inOut" }, 14.4);
-  tl.fromTo("#title", { opacity: 0, scale: 0.96 }, { opacity: 1, scale: 1, duration: 0.9, ease: "expo.out" }, 14.6);
-  tl.call(() => sfx.laserSnap(), null, 14.6);
+  tl.set("#title", { opacity: 1 }, 14.5);
+  tl.set([".title-word .ww-dot", ".title-mark .ww-eye-red"], { scale: 0, transformOrigin: "50% 50%" }, 14.5);
+  tl.set(".title-word", { clipPath: "inset(0 100% 0 0)" }, 14.5);
+  tl.set([".title-sub", ".title-tag"], { opacity: 0, y: 10 }, 14.5);
+  tl.fromTo(".title-mark", { opacity: 0, y: 14, scale: 0.9 }, { opacity: 1, y: 0, scale: 1, duration: 0.7, ease: "expo.out" }, 14.55);
+  tl.to(".title-mark .ww-eye-red", { scale: 1, duration: 0.35, ease: "back.out(3)" }, 14.95);
+  tl.call(() => sfx.shing(), null, 14.85);
+  tl.to(".title-word", { clipPath: "inset(0 0% 0 0)", duration: 0.7, ease: "expo.inOut" }, 15.05);
+  tl.to(".title-word .ww-dot", { scale: 1, duration: 0.3, ease: "back.out(4)" }, 15.7);
+  tl.call(() => sfx.laserSnap(), null, 15.7);
+  tl.to([".title-sub", ".title-tag"], { opacity: 1, y: 0, duration: 0.6, ease: "expo.out", stagger: 0.12 }, 15.9);
 
-  // 17.0  Dive into the "+" of Ctrl+F until its white fills the screen
-  tl.to([".title-sub", ".title-tag"], { opacity: 0, y: 12, duration: 0.35, ease: "power2.in" }, 16.9);
+  // 17.3  Dive into the red period of "wherewolf." until it fills the screen
+  tl.to([".title-sub", ".title-tag", ".title-mark"], { opacity: 0, y: 12, duration: 0.35, ease: "power2.in" }, 17.2);
   tl.call(() => {
-    aimZoomAtPlus();
+    aimZoomAtDot();
     sfx.whoosh(0.7);
     if (stopHum) stopHum(0.6);
-  }, null, 17.15);
-  tl.to(canvas, { opacity: 0, duration: 0.4, ease: "power2.in" }, 17.15);
-  // Fast dive (0.55s), then hold on pure white for a beat before the dashboard.
-  tl.to("#title h1", { scale: 140, duration: 0.55, ease: "expo.in" }, 17.2);
-  tl.to("#flash", { opacity: 1, duration: 0.08 }, 17.7);
-  tl.call(finish, null, 18.6);
+  }, null, 17.45);
+  tl.to(canvas, { opacity: 0, duration: 0.4, ease: "power2.in" }, 17.45);
+  // Fast dive (0.55s), then hold on the red for a beat before the dashboard.
+  tl.to(".title-word", { x: () => zoomShift.x, y: () => zoomShift.y, duration: 0.6, ease: "power3.inOut" }, 17.5);
+  tl.to(".title-word", { scale: 160, duration: 0.6, ease: "expo.in" }, 17.5);
+  tl.to("#flash", { opacity: 1, duration: 0.08 }, 18.05);
+  tl.call(finish, null, 18.8);
 
   return tl;
 }
 
-// Point the title's zoom at the middle of the "+", where the strokes cross,
-// so scaling it up fills the screen with solid white.
-function aimZoomAtPlus() {
-  const h1 = document.querySelector("#title h1");
-  const plus = document.getElementById("zoom-plus");
-  const a = h1.getBoundingClientRect();
-  const b = plus.getBoundingClientRect();
-  const ox = b.left - a.left + b.width / 2;
-  const oy = b.top - a.top + b.height * 0.52;
-  gsap.set(h1, { transformOrigin: `${ox}px ${oy}px` });
+// Point the title's zoom at the middle of the period, so scaling it up
+// fills the screen with its red.
+// ...and slide it to the middle of the screen on the way in.
+const zoomShift = { x: 0, y: 0 };
+function aimZoomAtDot() {
+  const word = document.querySelector(".title-word");
+  const dot = word.querySelector(".ww-dot");
+  const a = word.getBoundingClientRect();
+  const b = dot.getBoundingClientRect();
+  gsap.set(word, { transformOrigin: `${b.left - a.left + b.width / 2}px ${b.top - a.top + b.height / 2}px` });
+  zoomShift.x = innerWidth / 2 - (b.left + b.width / 2);
+  zoomShift.y = innerHeight / 2 - (b.top + b.height / 2);
 }
 
 function typeQuery(text) {

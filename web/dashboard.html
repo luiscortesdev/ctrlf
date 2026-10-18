@@ -3,175 +3,176 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Ctrl+F for Your Room</title>
+  <title>wherewolf · Ctrl+F for your room</title>
+  <link rel="icon" href="img/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="css/base.css">
-  <link rel="stylesheet" href="css/dashboard.css">
+  <link rel="stylesheet" href="css/app.css">
+  <script type="importmap">{ "imports": { "three": "./vendor/three.module.js" } }</script>
 </head>
 <body>
   <script>
-    // Coming straight from the intro? Start covered in white (see dashboard.js).
+    // Coming straight from the intro? Start covered in the logo's red (see world/main.js).
     try { if (sessionStorage.getItem("ctrlf-arrive") === "1") document.body.classList.add("arriving"); } catch (e) {}
   </script>
+  <canvas id="world" aria-hidden="true"></canvas>
+  <div class="shade" aria-hidden="true"></div>
   <div class="arrive" id="arrive" aria-hidden="true"></div>
-  <div class="app">
-    <header class="topbar">
-      <div class="brand">
-        <span class="brand-mark" aria-hidden="true"></span>
-        <span class="brand-name">Ctrl+F <span class="brand-thin">for your room</span></span>
-      </div>
-      <div class="topbar-right">
-        <span class="conn" id="conn"><span class="conn-dot"></span><span id="conn-text">Connecting…</span></span>
-        <a class="icon-btn" href="index.html?replay">Replay intro</a>
-        <button class="icon-btn" id="mute" type="button" aria-pressed="false">Sound on</button>
-      </div>
-    </header>
 
-    <main class="grid">
-      <section class="col-main">
-        <div class="feed" id="feed">
-          <img id="feed-img" alt="Live camera feed with detected objects" hidden>
-          <video id="feed-video" autoplay muted playsinline hidden></video>
-          <div class="feed-empty" id="feed-empty">
-            <span class="mono">NO CAMERA SIGNAL</span>
-          </div>
-          <svg class="feed-overlay" id="overlay" viewBox="0 0 1000 562.5" preserveAspectRatio="none" aria-hidden="true">
-            <line id="beam" x1="0" y1="562.5" x2="0" y2="562.5"></line>
-            <g id="reticle" opacity="0">
-              <rect id="ret-box" x="0" y="0" width="0" height="0"></rect>
-              <circle id="ret-dot" cx="0" cy="0" r="7"></circle>
-            </g>
-          </svg>
-          <div class="feed-tag mono" id="feed-tag">LIVE</div>
-          <div class="feed-laser" id="feed-laser" hidden><span></span>LASER ON</div>
-        </div>
+  <header class="top">
+    <a class="brand" href="dashboard.html" aria-label="wherewolf home"><span class="brand-lockup" data-brand="lockup"></span></a>
+    <div class="top-right">
+      <span class="status" id="conn" role="status"><span class="status-dot"></span><span id="conn-text">Connecting…</span></span>
+      <button class="btn btn-quiet" id="mute" type="button" aria-pressed="false">Sound: On</button>
+    </div>
+  </header>
 
-        <form class="ask" id="ask-form" autocomplete="off">
-          <label for="ask-input" class="ask-label">Ask about anything you've set down</label>
-          <div class="ask-row">
-            <input id="ask-input" type="text" placeholder="Where are my keys?">
-            <button type="button" class="ask-mic" id="ask-mic" aria-label="Ask out loud (push to talk)">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
-            </button>
-            <button type="submit" class="ask-go">Find it</button>
+  <main class="page" id="page">
+
+    <!-- Home: ask, and your key items -->
+    <section class="view" id="home" aria-labelledby="home-h">
+      <h1 id="home-h">What are you looking for?</h1>
+      <form class="ask" id="ask-form" autocomplete="off">
+        <label for="ask-input" class="visually-hidden">What are you looking for?</label>
+        <input id="ask-input" type="text" placeholder="For example: my keys" enterkeyhint="search">
+        <button type="submit" class="btn btn-primary btn-big">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+          Find
+        </button>
+        <button type="button" class="btn btn-secondary btn-big" id="ask-mic">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+          <span id="ask-mic-text">Ask out loud</span>
+        </button>
+      </form>
+      <p class="hint" id="ask-hint">Type what you lost and press Find, or press "Ask out loud" and say it.</p>
+
+      <div class="section-head">
+        <h2 id="items-h">Your key items <span class="count" id="items-count"></span></h2>
+        <button type="button" class="btn btn-secondary" id="to-add">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          Add a key item
+        </button>
+      </div>
+      <div class="items" id="items-grid" aria-labelledby="items-h"></div>
+      <div class="empty" id="items-empty" hidden>
+        <span class="empty-mark" data-brand="mark"></span>
+        <h3>No key items yet</h3>
+        <p>Show wherewolf the things you lose most, like your keys, glasses or wallet. It will keep track of where they are.</p>
+        <button type="button" class="btn btn-primary btn-big" id="empty-add">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          Add your first key item
+        </button>
+      </div>
+    </section>
+
+    <!-- Add a key item -->
+    <section class="view" id="add" hidden aria-labelledby="add-h">
+      <button type="button" class="btn btn-quiet back" data-home>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+        Back
+      </button>
+      <h1 id="add-h">Add a key item</h1>
+      <ol class="stepper" id="add-steps" aria-label="Progress">
+        <li data-step="name"><span class="num">1</span>Name it</li>
+        <li data-step="show"><span class="num">2</span>Show it</li>
+        <li data-step="place"><span class="num">3</span>Place it</li>
+      </ol>
+
+      <div class="card">
+        <form class="add-name" id="add-name-form" autocomplete="off">
+          <h2 class="step-title">Step 1 of 3: What is it called?</h2>
+          <label for="add-name" class="visually-hidden">Name of the item</label>
+          <div class="ask">
+            <input id="add-name" type="text" placeholder="For example: reading glasses" maxlength="40" enterkeyhint="next">
+            <button type="submit" class="btn btn-primary btn-big">Next</button>
           </div>
+          <p class="hint">Use a short name you would say out loud, like "keys", "wallet" or "reading glasses".</p>
+          <p class="error" id="add-error" role="alert"></p>
         </form>
 
-        <section class="card tracking" aria-labelledby="tracking-h">
-          <div class="card-head">
-            <h2 id="tracking-h">Tracking</h2>
-            <span class="card-meta" id="tracking-count"></span>
+        <div class="add-live" id="add-live" hidden>
+          <div class="cam" id="add-cam">
+            <img id="add-feed" alt="What the camera sees">
+            <video id="add-video" autoplay muted playsinline hidden></video>
+            <div class="cam-brackets" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+            <span class="cam-tag" id="add-cam-tag">Laptop camera</span>
+            <span class="cam-count" id="add-count" aria-live="assertive"></span>
           </div>
-          <button type="button" class="teach-open" id="teach-open">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="3"/></svg>
-            <span><b>Teach by showing</b><small>Hold up any object to the laptop camera and it learns it</small></span>
-          </button>
-          <p class="card-sub">Turn items on or off, or teach it something new. It starts looking right away.</p>
-          <div class="chips" id="chips"></div>
-          <form class="track-add" id="track-form" autocomplete="off">
-            <label for="track-input" class="visually-hidden">Track something new</label>
-            <input id="track-input" type="text" placeholder="Something new? Type its name, e.g. retainer case">
-            <button type="submit" class="icon-btn">Add</button>
-          </form>
-          <div class="suggest" id="suggest"></div>
-        </section>
-      </section>
-
-      <aside class="col-side">
-        <section class="card status" id="status" data-state="IDLE" aria-live="polite">
-          <div class="card-head"><h2>Status</h2><span class="card-meta mono" id="status-clock"></span></div>
-          <div class="status-headline" id="status-headline">Watching the room</div>
-          <div class="status-msg" id="status-msg">Ask where something is.</div>
-          <ol class="steps" id="steps">
-            <li data-step="heard">Heard</li>
-            <li data-step="found">Found</li>
-            <li data-step="aiming">Aiming</li>
-            <li data-step="done">Done</li>
-          </ol>
-        </section>
-
-        <section class="card lastseen" aria-labelledby="lastseen-h">
-          <div class="card-head"><h2 id="lastseen-h">Last seen</h2><span class="card-meta" id="lastseen-count"></span></div>
-          <ul class="items" id="items"></ul>
-        </section>
-
-        <section class="card activity" aria-labelledby="activity-h">
-          <div class="card-head"><h2 id="activity-h">Activity</h2></div>
-          <ol class="log mono" id="log"></ol>
-        </section>
-      </aside>
-    </main>
-  </div>
-
-  <dialog class="teach" id="teach" aria-labelledby="teach-h">
-    <div class="teach-inner">
-      <div class="teach-head">
-        <h2 id="teach-h">Teach a new object</h2>
-        <button type="button" class="icon-btn" id="teach-close">Close</button>
-      </div>
-
-      <!-- Live: the app runs the teaching (its laptop camera, its questions). -->
-      <div class="teach-live" id="teach-live" hidden>
-        <div class="teach-cam teach-live-cam">
-          <img id="teach-live-img" alt="What the app's camera sees while teaching">
-          <p class="teach-live-hint" id="teach-live-hint">Click the object in the picture if it picked the wrong one.</p>
-        </div>
-        <div class="teach-side">
-          <p class="teach-live-say" id="teach-live-say" aria-live="polite">Starting…</p>
-          <form class="teach-live-name" id="teach-live-form" autocomplete="off">
-            <label class="teach-label" for="teach-live-name">What is it?</label>
-            <div class="teach-actions">
-              <input id="teach-live-name" type="text" placeholder="e.g. retainer case">
-              <button type="submit" class="icon-btn">Send</button>
+          <div class="add-side">
+            <h2 class="step-title" id="add-step-title">Step 2 of 3: Show it to the camera</h2>
+            <p class="say" id="add-say" aria-live="polite"></p>
+            <p class="hint" id="add-tip"></p>
+            <div class="row" id="add-yesno" hidden>
+              <button type="button" class="btn btn-primary btn-big" id="add-yes">Yes, that's it</button>
+              <button type="button" class="btn btn-secondary btn-big" id="add-no">No, try again</button>
             </div>
-          </form>
-          <div class="teach-actions" id="teach-live-yesno" hidden>
-            <button type="button" class="ask-go" id="teach-yes">Yes, that's it</button>
-            <button type="button" class="icon-btn" id="teach-no">No</button>
+            <button type="button" class="btn btn-primary btn-big" id="add-capture" hidden>Take the photos</button>
+            <button type="button" class="btn btn-quiet" id="add-cancel">Cancel</button>
           </div>
-          <ol class="teach-steps">
-            <li>Hold it up to the laptop camera and turn it a little.</li>
-            <li>Then show it to the room camera, or put it down and step back.</li>
-            <li>Answer "is this it?" with Yes or No.</li>
-          </ol>
-          <div class="teach-actions">
-            <button type="button" class="icon-btn" id="teach-cancel">Cancel teaching</button>
+        </div>
+
+        <div class="add-done" id="add-done" hidden>
+          <div class="done-photo"><img id="add-done-img" alt=""><span class="done-mark" data-brand="mark"></span>
+            <span class="done-check" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span></div>
+          <h2>Done! <span class="cap" id="add-done-name"></span> is now a key item.</h2>
+          <p class="hint">wherewolf is keeping an eye on it. To find it later, type or say "<span id="add-done-name2"></span>".</p>
+          <div class="row">
+            <button type="button" class="btn btn-primary btn-big" id="add-to-items">See your key items</button>
+            <button type="button" class="btn btn-secondary btn-big" id="add-again">Add another</button>
           </div>
         </div>
       </div>
+    </section>
 
-      <div class="teach-body" id="teach-mock">
-        <div class="teach-cam">
-          <video id="teach-video" autoplay muted playsinline></video>
-          <div class="teach-guide" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
-          <div class="teach-count" id="teach-count" aria-live="assertive"></div>
-          <div class="teach-nocam" id="teach-nocam" hidden>No camera found. Check that the laptop webcam is allowed.</div>
-        </div>
+    <!-- Finding something: no camera picture, just what the laser is doing and the item's details -->
+    <section class="view" id="find" hidden aria-labelledby="find-h">
+      <button type="button" class="btn btn-quiet back" data-home>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+        Back
+      </button>
 
-        <div class="teach-side">
-          <label class="teach-label" for="teach-cam-select">Camera</label>
-          <select id="teach-cam-select"></select>
-
-          <label class="teach-label" for="teach-name">What is it?</label>
-          <input id="teach-name" type="text" placeholder="e.g. retainer case" autocomplete="off">
-
-          <ol class="teach-steps">
-            <li>Hold the object inside the box.</li>
-            <li>Press <b>Capture</b>, then slowly turn it so the camera sees every side.</li>
-            <li>Name it and save.</li>
-          </ol>
-
-          <div class="teach-shots" id="teach-shots"></div>
-
-          <div class="teach-actions">
-            <button type="button" class="icon-btn" id="teach-capture">Capture</button>
-            <button type="button" class="ask-go" id="teach-save" disabled>Save to memory</button>
-          </div>
-          <p class="teach-msg" id="teach-msg" aria-live="polite"></p>
+      <div class="laser-status" id="laser-status" data-phase="init" role="status" aria-live="polite">
+        <span class="laser-orb" aria-hidden="true"><i></i></span>
+        <div>
+          <p class="laser-label" id="laser-label">Initializing laser…</p>
+          <h1 id="find-h"><span id="find-headline">Looking…</span></h1>
         </div>
       </div>
-    </div>
-  </dialog>
+      <p class="answer" id="find-msg"></p>
 
-  <script type="module" src="js/dashboard.js"></script>
+      <div class="card find-body">
+        <div class="find-item" id="find-item">
+          <div class="find-photo" id="find-photo">
+            <img id="find-photo-img" alt="">
+            <span class="item-mark" data-brand="mark"></span>
+            <span class="item-status" id="find-status"><i></i>Checking…</span>
+          </div>
+          <div class="find-details">
+            <p class="find-name cap" id="find-name"></p>
+            <dl class="stats">
+              <div><dt>Where</dt><dd id="stat-where">Checking…</dd></div>
+              <div><dt>Last seen</dt><dd id="stat-seen">Checking…</dd></div>
+              <div><dt>Right now</dt><dd id="stat-now">Checking…</dd></div>
+              <div><dt>Laser</dt><dd id="stat-laser">Warming up</dd></div>
+            </dl>
+          </div>
+        </div>
+        <div class="find-side">
+          <ol class="progress" id="find-steps" aria-label="Progress">
+            <li>Heard you</li><li>Laser ready</li><li>Found it</li><li>Pointing at it</li>
+          </ol>
+          <div class="row">
+            <button type="button" class="btn btn-primary btn-big" data-home>Done</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <a href="index.html?replay">Replay intro</a>
+    <a href="classic.html">Classic view</a>
+  </footer>
+
+  <script type="module" src="js/world/main.js"></script>
 </body>
 </html>

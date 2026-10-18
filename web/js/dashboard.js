@@ -1,6 +1,8 @@
 import * as api from "./api.js";
 import * as sfx from "./sound.js";
 import { initTeach, openTeach } from "./teach.js";
+import * as fx from "./fx.js";
+import * as brand from "./brand.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -64,6 +66,26 @@ async function setupFeed() {
 
 // The laser rig sits at the bottom-left of the camera's view in our setup.
 const RIG = { x: 40, y: 562.5 };
+const W = 1000, H = 562.5; // the overlay's coordinates (16:9, like the feed box)
+
+// The feed fills its box (object-fit: cover), so a camera that isn't 16:9 gets
+// cropped. These convert between camera fractions (bbox) and overlay units.
+function feedMedia() {
+  const img = $("feed-img"), vid = $("feed-video");
+  if (!img.hidden && img.naturalWidth) return [img.naturalWidth, img.naturalHeight];
+  if (!vid.hidden && vid.videoWidth) return [vid.videoWidth, vid.videoHeight];
+  return [16, 9];
+}
+function toOverlay([x1, y1, x2, y2]) {
+  const [nw, nh] = feedMedia();
+  const s = Math.max(W / nw, H / nh), ox = (W - nw * s) / 2, oy = (H - nh * s) / 2;
+  return { x: ox + x1 * nw * s, y: oy + y1 * nh * s, w: (x2 - x1) * nw * s, h: (y2 - y1) * nh * s };
+}
+function fromOverlay(x, y) {
+  const [nw, nh] = feedMedia();
+  const s = Math.max(W / nw, H / nh), ox = (W - nw * s) / 2, oy = (H - nh * s) / 2;
+  return [(x - ox) / (nw * s), (y - oy) / (nh * s)];
+}
 
 api.on("target", ({ name, bbox }) => {
   const beam = $("beam");
@@ -77,15 +99,14 @@ api.on("target", ({ name, bbox }) => {
     $("feed-laser").hidden = true;
     return;
   }
-  const [x1, y1, x2, y2] = bbox;
-  const W = 1000, H = 562.5;
+  const b = toOverlay(bbox);
   const box = $("ret-box");
-  box.setAttribute("x", x1 * W);
-  box.setAttribute("y", y1 * H);
-  box.setAttribute("width", (x2 - x1) * W);
-  box.setAttribute("height", (y2 - y1) * H);
-  const cx = ((x1 + x2) / 2) * W;
-  const cy = ((y1 + y2) / 2) * H;
+  box.setAttribute("x", b.x);
+  box.setAttribute("y", b.y);
+  box.setAttribute("width", b.w);
+  box.setAttribute("height", b.h);
+  const cx = b.x + b.w / 2;
+  const cy = b.y + b.h / 2;
   $("ret-dot").setAttribute("cx", cx);
   $("ret-dot").setAttribute("cy", cy);
 
@@ -101,7 +122,12 @@ api.on("target", ({ name, bbox }) => {
     beam.setAttribute("x2", RIG.x + (cx - RIG.x) * e);
     beam.setAttribute("y2", RIG.y + (cy - RIG.y) * e);
     if (t < 1) requestAnimationFrame(stepFn);
-    else { ret.setAttribute("opacity", "1"); ret.classList.add("pulse"); }
+    else {
+      ret.setAttribute("opacity", "1"); ret.classList.add("pulse");
+      // The lock-on sends a ripple through the background from the dot.
+      const r = $("feed").getBoundingClientRect();
+      fx.pulse(r.left + (cx / W) * r.width, r.top + (cy / H) * r.height);
+    }
   };
   requestAnimationFrame(stepFn);
   $("feed-laser").hidden = false;
@@ -119,9 +145,10 @@ function setSteps(upTo, now) {
   });
 }
 
+let lastHeadline = "";
 function setHeadline(html, msg) {
-  $("status-headline").innerHTML = html;
-  $("status-msg").textContent = msg || "";
+  if (html !== lastHeadline) { lastHeadline = html; fx.wordsIn($("status-headline"), html); }
+  fx.typeIn($("status-msg"), msg || "");
 }
 
 function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
@@ -148,7 +175,7 @@ api.on("state", (msg) => {
       if (msg.result === "found") {
         setHeadline(`Found <em>${name}</em>`, msg.message);
         setSteps("done", "done");
-        play(() => sfx.chime());
+        play(() => sfx.shing());
       } else if (msg.result === "hidden") {
         setHeadline(`<em>${name.charAt(0).toUpperCase() + name.slice(1)}</em> ${name.endsWith("s") ? "are" : "is"} out of sight`, msg.message);
         setSteps("found", "found");
@@ -234,7 +261,7 @@ function renderItems() {
       ? `<img src="${esc(it.snapshot)}" alt="Last photo of ${esc(it.name)}">`
       : esc(it.name.charAt(0).toUpperCase());
     const when = it.visible ? relTime(it.last_seen) : `${relTime(it.last_seen)} · ${absTime(it.last_seen)}`;
-    return `<li class="item${isTarget ? " target" : ""}" data-name="${esc(it.name)}">
+    return `<li class="item fx-spot${isTarget ? " target" : ""}" data-name="${esc(it.name)}">
       <div class="thumb">${thumb}</div>
       <div class="item-body">
         <div class="item-top"><span class="item-name">${esc(it.name)}</span>${badge}</div>
@@ -267,7 +294,7 @@ api.on("tracked", (items) => {
 function renderChips() {
   const chips = $("chips");
   chips.innerHTML = state.tracked.map((t, i) =>
-    `<button type="button" class="chip" data-i="${i}" aria-pressed="${t.enabled}">${esc(t.name)}</button>`
+    `<button type="button" class="chip fx-brackets" data-i="${i}" aria-pressed="${t.enabled}">${esc(t.name)}</button>`
   ).join("");
   const on = state.tracked.filter((t) => t.enabled).length;
   $("tracking-count").textContent = `${on} of ${state.tracked.length} on`;
@@ -276,14 +303,16 @@ function renderChips() {
   // Live: the app already knows its list; new things are added by teaching.
   const left = api.mode === "live" ? [] : SUGGESTIONS.filter((s) => !have.has(s)).slice(0, 5);
   $("suggest").innerHTML = left.length
-    ? `<span>Quick add:</span>` + left.map((s) => `<button type="button" data-add="${esc(s)}">+ ${esc(s)}</button>`).join("")
+    ? `<span>Quick add:</span>` + left.map((s) => `<button type="button" class="fx-brackets" data-add="${esc(s)}">+ ${esc(s)}</button>`).join("")
     : "";
 }
 
 $("chips").addEventListener("click", (e) => {
   const btn = e.target.closest(".chip");
   if (!btn) return;
-  const next = state.tracked.map((t, i) => (i === Number(btn.dataset.i) ? { ...t, enabled: !t.enabled } : t));
+  const i = Number(btn.dataset.i);
+  const next = state.tracked.map((t, j) => (j === i ? { ...t, enabled: !t.enabled } : t));
+  try { sfx.toggle(next[i].enabled); } catch {}
   api.setTracked(next);
 });
 
@@ -339,15 +368,18 @@ api.on("voice", (v) => {
 
 api.on("log", ({ time, text }) => {
   const li = document.createElement("li");
-  li.innerHTML = `<time>${time.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}</time><span>${esc(text)}</span>`;
+  li.innerHTML = `<time>${time.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}</time><span></span>`;
   $("log").prepend(li);
+  const span = li.querySelector("span");
+  if (state.loaded) { fx.scramble(span, text, Math.min(500, 150 + text.length * 8)); play(() => sfx.decode()); }
+  else span.textContent = text;
   while ($("log").children.length > 8) $("log").lastChild.remove();
 });
 
 /* ---------------- Arrival from the intro ---------------- */
 
-// The intro ends on a screen of white. Here that white collapses into the
-// red laser dot in the logo, the dot pings, and the panels rise in.
+// The intro ends by diving into the red period of "wherewolf." Here that red
+// collapses back into the period in the logo, it pings, and the panels rise in.
 async function arrive() {
   if (!document.body.classList.contains("arriving")) return;
   try { sessionStorage.removeItem("ctrlf-arrive"); } catch {}
@@ -356,7 +388,8 @@ async function arrive() {
   const order = [".topbar", ".feed", ".ask", ".status", ".lastseen", ".tracking", ".activity"];
   order.forEach((sel, i) => document.querySelector(sel)?.style.setProperty("--d", `${0.55 + i * 0.07}s`));
 
-  const dot = document.querySelector(".brand-mark").getBoundingClientRect();
+  const dotEl = document.querySelector(".brand .ww-dot");
+  const dot = dotEl.getBoundingClientRect();
   const x = dot.left + dot.width / 2;
   const y = dot.top + dot.height / 2;
   const cover = $("arrive");
@@ -369,14 +402,99 @@ async function arrive() {
   );
   setTimeout(() => {
     try { sfx.laserSnap(); } catch {}
-    document.querySelector(".brand-mark").classList.add("ping");
+    dotEl.classList.add("ping");
+    fx.pulse(x, y);
   }, 950);
   document.body.classList.add("arrived");
   await anim.finished;
   document.body.classList.remove("arriving");
 }
 
+/* ---------------- Feed: crosshair, hover an object, click to find it ---------------- */
+
+const hoverBox = () => $("hover-box");
+function showHoverBox(bbox, ghost) {
+  const b = toOverlay(bbox);
+  const r = hoverBox();
+  r.setAttribute("x", b.x); r.setAttribute("y", b.y);
+  r.setAttribute("width", b.w); r.setAttribute("height", b.h);
+  r.classList.add("on");
+  r.classList.toggle("ghost", !!ghost);
+  return b;
+}
+function hideHoverBox() { hoverBox().classList.remove("on", "ghost"); }
+
+function initFeedHud() {
+  const feed = $("feed"), hud = $("feed-hud"), read = $("hud-read"), pick = $("feed-pick");
+  let picked = null;
+  feed.addEventListener("pointermove", (e) => {
+    const r = feed.getBoundingClientRect();
+    const px = e.clientX - r.left, py = e.clientY - r.top;
+    hud.style.setProperty("--hx", `${px}px`);
+    hud.style.setProperty("--hy", `${py}px`);
+    const [fx_, fy] = fromOverlay((px / r.width) * W, (py / r.height) * H);
+    read.textContent = `X ${fx_.toFixed(3)}  Y ${fy.toFixed(3)}`;
+    // Is the cursor on something it can see right now? Smallest box wins.
+    const hits = [...state.items.values()].filter((it) => it.visible && it.bbox && isTracked(it.name)
+      && fx_ >= it.bbox[0] && fx_ <= it.bbox[2] && fy >= it.bbox[1] && fy <= it.bbox[3])
+      .sort((a, b) => (a.bbox[2] - a.bbox[0]) * (a.bbox[3] - a.bbox[1]) - (b.bbox[2] - b.bbox[0]) * (b.bbox[3] - b.bbox[1]));
+    const hit = hits[0] || null;
+    if (hit?.name === picked) return;
+    picked = hit?.name || null;
+    feed.classList.toggle("picking", !!hit);
+    feed.classList.toggle("fx-click", !!hit);
+    if (!hit) { hideHoverBox(); pick.hidden = true; return; }
+    const b = showHoverBox(hit.bbox);
+    pick.innerHTML = `<b>${esc(hit.name)}</b> · click to find`;
+    pick.style.left = `${(b.x / W) * 100}%`;
+    pick.style.top = `${(b.y / H) * 100}%`;
+    pick.hidden = false;
+    try { sfx.hover(); } catch {}
+  });
+  feed.addEventListener("pointerleave", () => { picked = null; hideHoverBox(); pick.hidden = true; feed.classList.remove("picking", "fx-click"); });
+  feed.addEventListener("click", () => {
+    if (!picked) return;
+    sfx.unlock();
+    api.ask(`where is my ${picked}`);
+  });
+}
+
+/* ---------------- Last seen: hover a row to see it on the feed ---------------- */
+
+function initPeek() {
+  const list = $("items"), peek = $("peek");
+  let current = null;
+  list.addEventListener("mouseover", (e) => {
+    const li = e.target.closest(".item");
+    if (!li || li.dataset.name === current) return;
+    current = li.dataset.name;
+    const it = state.items.get(current);
+    if (!it) return;
+    if (it.bbox) showHoverBox(it.bbox, !it.visible);
+    if (it.snapshot) {
+      $("peek-img").src = it.snapshot;
+      $("peek-tag").textContent = it.visible ? `${it.name} · in view` : `${it.name} · last seen ${relTime(it.last_seen)}`;
+      const r = li.getBoundingClientRect();
+      peek.style.left = `${Math.max(12, r.left - 332)}px`;
+      peek.style.top = `${Math.min(innerHeight - 214, Math.max(12, r.top + r.height / 2 - 100))}px`;
+      peek.classList.add("show");
+    } else peek.classList.remove("show");
+  });
+  list.addEventListener("mouseout", (e) => {
+    if (e.relatedTarget && e.relatedTarget.closest?.(".item")) return;
+    current = null;
+    hideHoverBox();
+    peek.classList.remove("show");
+  });
+}
+
 /* ---------------- Start ---------------- */
+
+brand.mount();
+fx.init();
+fx.dialogFx($("teach"));
+initFeedHud();
+initPeek();
 
 (async () => {
   initTeach();

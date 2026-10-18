@@ -1,0 +1,5 @@
+Atkinson Hyperlegible Next is by the Braille Institute of America and The Atkinson
+Hyperlegible Next Project Authors, released under the SIL Open Font License 1.1 (free to use,
+embed and share): atkinson-hyperlegible-next-LICENSE.txt.
+Files from Fontsource (npm @fontsource-variable/atkinson-hyperlegible-next), latin subset.
+https://github.com/googlefonts/atkinson-hyperlegible-next

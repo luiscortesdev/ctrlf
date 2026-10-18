@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Ctrl+F for Your Room</title>
+  <title>wherewolf · Ctrl+F for your room</title>
+  <link rel="icon" href="img/favicon.svg" type="image/svg+xml">
   <script>
     // Play the intro once. Later visits go straight to the dashboard,
     // unless the URL has ?replay.
@@ -26,22 +27,24 @@
     <p class="line" id="line" aria-live="polite"></p>
     <div class="query" id="query"><span class="query-mark" aria-hidden="true"></span><span id="query-text"></span></div>
     <div class="title" id="title">
-      <h1>Ctrl<span id="zoom-plus">+</span>F</h1>
-      <p class="title-sub">for your room</p>
+      <div class="title-mark" data-brand="mark"></div>
+      <h1 class="title-word" data-brand="wordmark"></h1>
+      <p class="title-sub">Ctrl+F for your room</p>
       <p class="title-tag">Find anything you've set down.</p>
     </div>
     <div class="labels" id="labels"></div>
   </div>
 
   <div class="intro-controls">
-    <button class="icon-btn" id="mute" type="button" aria-pressed="false">Sound on</button>
-    <button class="icon-btn" id="skip" type="button">Skip intro</button>
+    <button class="icon-btn fx-brackets" id="mute" type="button" aria-pressed="false">Sound on</button>
+    <button class="icon-btn fx-brackets" id="skip" type="button">Skip intro</button>
   </div>
 
   <div class="start" id="start" hidden>
-    <button type="button" id="start-btn">
+    <div class="start-brand brand-lockup" data-brand="lockup"></div>
+    <button type="button" id="start-btn" class="fx-wipe">
       <span class="start-dot" aria-hidden="true"></span>
-      Begin
+      <span class="fx-label">Begin</span>
     </button>
   </div>
 
