@@ -7,7 +7,7 @@
 # PlatformIO and pytest caches
 .pio/
 .pytest_cache/
-__pycache__/
+**__pycache__/
 *.pyc
 # What the app remembers and learns: photos of your room and things. Never commit it.
 data/
