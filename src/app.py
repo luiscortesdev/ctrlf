@@ -448,21 +448,48 @@ class Memory:
 
     def forget(self, label):
         """Forget where one thing was, and its snapshots."""
-        for (snap,) in self.db.execute("SELECT snapshot FROM events WHERE label=?", (label,)).fetchall():
-            if snap and os.path.exists(snap):
-                os.remove(snap)
-        self.db.execute("DELETE FROM objects WHERE label=?", (label,))
-        self.db.execute("DELETE FROM events WHERE label=?", (label,))
-        self.db.commit()
+        snaps = [s for (s,) in self.db.execute("SELECT snapshot FROM events WHERE label=?", (label,))
+                 if s]
+        with self.db:  # the rows first: if a file won't go, it's still forgotten
+            self.db.execute("DELETE FROM objects WHERE label=?", (label,))
+            self.db.execute("DELETE FROM events WHERE label=?", (label,))
         self._last_write.pop(label, None)
+        remove_files(snaps)
 
     def wipe(self):
-        self.db.execute("DELETE FROM objects")
-        self.db.execute("DELETE FROM events")
-        self.db.commit()
+        """Forget everything: every row, then every snapshot. Returns the snapshots that
+        couldn't be deleted (still open somewhere); the next wipe tries them again."""
+        with self.db:
+            self.db.execute("DELETE FROM objects")
+            self.db.execute("DELETE FROM events")
+        self.db.execute("VACUUM")  # deleted rows linger in the file's free pages until this
         self._last_write.clear()
-        for f in glob.glob(os.path.join(self.snap_dir, "*.jpg")):
-            os.remove(f)
+        left = remove_files(glob.glob(os.path.join(self.snap_dir, "*.jpg")))
+        if left:
+            print(f"\n(couldn't delete {len(left)} snapshot(s), still open somewhere: "
+                  f"{', '.join(os.path.basename(f) for f in left)})")
+        return left
+
+
+def remove_files(paths, wait=1.0):
+    """Delete files, returning the ones that wouldn't go. Windows won't delete a file while
+    anything has it open (the website sending it, an antivirus scanning a new one); macOS
+    and Linux will. So locked ones get more tries, for up to `wait` seconds in all."""
+    left = list(paths)
+    give_up = time.monotonic() + wait
+    while True:
+        locked = []
+        for f in left:
+            try:
+                os.remove(f)
+            except FileNotFoundError:
+                pass
+            except OSError:  # PermissionError: [WinError 32] ... used by another process
+                locked.append(f)
+        if not locked or time.monotonic() >= give_up:
+            return locked
+        left = locked
+        time.sleep(0.1)
 
 
 # ------------------------------------------------------------------ words
@@ -1298,6 +1325,16 @@ class App:
             return
         self.aimer.start(point, max(10, 0.02 * min(size)), size, now)
 
+    def wipe(self):
+        """Forget everything it has seen: the database and snapshots, and what it's following
+        right now. Those streaks have to go too, or the next detector pass would remember
+        everything still on the desk again at once."""
+        self.mem.wipe()
+        self.tracks.clear()
+        self.tracker.clear()
+        self.spots.clear()
+        self.highlight = None
+
     def locate(self, label, now):
         """(where it is or was, visible right now?). A live sighting wins over memory,
         so it can answer about something you're holding before it has been remembered.
@@ -1330,9 +1367,7 @@ class App:
             say(f"I've seen your {join_words(things)}." if things else "I haven't seen anything yet.")
             return True
         if c in ("wipe", "wipe memory", "forget everything", "clear memory"):
-            self.mem.wipe()
-            self.tracks.clear()
-            self.tracker.clear()
+            self.wipe()
             say("Memory wiped.")
             return True
         m = re.match(r"servo\s+(-?[\d.]+)\s+(-?[\d.]+)$", c)
