@@ -44,6 +44,7 @@ drives the servos and the laser.
 | `web/` | The website: 3D intro + dashboard (plain HTML/CSS/JS, works offline) |
 | `scripts/camera_test.py` | Live view with boxes, for tuning thresholds |
 | `scripts/calibrate.py` | Laser calibration sweep (writes `data/calibration.json`) |
+| `scripts/calibrate_manual.py` | Laser calibration by hand, when the camera can't see the dot: steer with W A S D, click where the dot is |
 | `scripts/measure_lag.py` | Times how far the Wi-Fi camera runs behind, with the LED ring (for `CAMERA_LAG_SECS`) |
 | `scripts/preflight.py` | Checks the network, camera, ESP32, Gemini, models, audio and calibration before a demo |
 | `scripts/test_servos.py` | First test of the pan/tilt head and laser over USB, no camera; `--jog` to move it by hand |

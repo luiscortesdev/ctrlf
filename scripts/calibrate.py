@@ -90,7 +90,18 @@ def sweep(camera, pointer, pans, tilts, log=print):
 
 
 def main():
-    source = camera_option(description="Laser calibration sweep.")
+    import argparse
+
+    p = argparse.ArgumentParser(add_help=False)
+    p.add_argument("--pans", type=int, nargs=3, metavar=("FROM", "TO", "STEP"))
+    p.add_argument("--tilts", type=int, nargs=3, metavar=("FROM", "TO", "STEP"))
+    own, rest = p.parse_known_args()
+    # A smaller grid, e.g. only where the dot lands on the floor and the table:
+    # --pans 60 120 10 --tilts 114 134 5
+    pans = list(range(own.pans[0], own.pans[1] + 1, own.pans[2])) if own.pans else list(PANS)
+    tilts = ([t for t in range(own.tilts[0], own.tilts[1] + 1, own.tilts[2]) if TILT_MIN <= t <= TILT_MAX]
+             if own.tilts else TILTS)
+    source = camera_option(rest, "Laser calibration sweep.")
     path = per_camera(CALIB_PATH, source)
     cap = open_camera(source, CAMERA_LAG_SECS)
     pointer = Pointer(POINTER_LINK, POINTER_HOST)
@@ -103,7 +114,7 @@ def main():
     camera = LiveCamera(cap)
     size = camera.wait(0.5).shape[1::-1]  # (width, height)
     try:
-        points = sweep(camera, pointer, list(PANS), TILTS)
+        points = sweep(camera, pointer, pans, tilts)
     except KeyboardInterrupt:
         raise SystemExit("Stopped.")
     finally:

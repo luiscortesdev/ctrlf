@@ -237,6 +237,27 @@ def test_not_calibrated_yet(rig):
     assert 3.0 <= off - on <= 5.0 and not board.laser
 
 
+def test_hand_calibration(rig, tmp_path):
+    """Calibrated by hand (scripts/calibrate_manual.py, for when the camera can't see the
+    dot): one move straight to where the calibration says, laser on for the hold, no
+    flashes to look for the dot. The file remembers it was made by hand."""
+    a, board, room, clock, said = rig()
+    a.aimer.map.manual = True
+    path = str(tmp_path / "calibration.json")
+    a.aimer.map.save(path)
+    assert Calibration.load(path).manual and not calibrate(room).manual
+    see_keys(a, room, clock)
+    a.command("where are my keys?", clock.t)
+    run_frames(a, room, clock)
+    assert a.aimer.message == "pointing by the hand calibration"
+    (_, pan, tilt, laser), = moves(board)  # one move, laser on, no corrections
+    cx, cy = (KEYS[0] + KEYS[2]) // 2, (KEYS[1] + KEYS[3]) // 2
+    assert (pan, tilt) == pytest.approx(a.aimer.map.to_angles(cx / W, cy / H), abs=0.06)
+    assert laser is True
+    (on, off), = laser_intervals(board)
+    assert 3.0 <= off - on <= 5.0 and not board.laser
+
+
 def test_never_aims_above_the_table(rig):
     """Keys seen high up in a picture whose top is above the head's highest tilt: it goes
     as high as TILT_MIN allows, never asks for more, and still switches the laser off."""
