@@ -5,6 +5,7 @@ import os
 import socket
 import time
 
+import numpy as np
 import pytest
 
 from src.vision import camera, laser_tracker
@@ -105,8 +106,11 @@ def test_aimer_waits_for_camera_lag():
         def move(self, pan, tilt, laser=None):
             return 0.5  # seconds the move takes
 
+        def __init__(self):
+            self.sent = []
+
         def send(self, cmd):
-            pass
+            self.sent.append(cmd)
 
     class Mapping:  # calibrated: it can say where the dot should land
         def to_angles(self, u, v):
@@ -115,15 +119,23 @@ def test_aimer_waits_for_camera_lag():
         def to_image(self, pan, tilt):
             return 0.5, 0.5
 
-    aimer = laser_tracker.Aimer(Pointer(), Mapping(), lag=0.8)
+    pointer = Pointer()
+    aimer = laser_tracker.Aimer(pointer, Mapping(), lag=0.8)
     aimer.start((320, 180), 10, (640, 360), 0.0)
-    arrived = 0.5 + laser_tracker.SETTLE_SECS + 0.8
-    assert aimer.state == "off" and abs(aimer.wait - arrived) < 1e-9
-    aimer.update(None, arrived - 0.01)  # the picture still shows the head moving
-    assert aimer.state == "off"
-    aimer.update("laser-off frame", arrived)
-    assert aimer.state == "on"
-    assert abs(aimer.wait - (arrived + laser_tracker.LASER_SETTLE_SECS + 0.8)) < 1e-9
+    blink = aimer.blink
+    arrived = 0.5 + laser_tracker.SETTLE_SECS + 0.8  # the picture shows the head stopped
+    assert aimer.state == "looking" and abs(blink.from_t - arrived) < 1e-9
+    frame = np.zeros((360, 640, 3), np.uint8)
+    aimer.update(frame, arrived - 0.01)  # the picture still shows the head moving: unused
+    assert blink.counts == [0]
+    aimer.update(frame, arrived)
+    assert blink.counts == [1] and pointer.sent[-1] == "L0"
+    switched = arrived + laser_tracker.CAPTURE_SECS
+    aimer.update(frame, switched)  # enough laser-off frames: laser on
+    assert pointer.sent[-1] == "L1"
+    assert abs(blink.from_t - (switched + laser_tracker.LASER_SETTLE_SECS + 0.8)) < 1e-9
+    aimer.update(frame, blink.from_t - 0.01)  # still the laser-off picture: unused
+    assert blink.counts[-1] == 0
 
 
 def test_choose_camera():
